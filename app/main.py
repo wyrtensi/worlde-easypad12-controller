@@ -8,6 +8,7 @@ from app.midi_controller import MIDIController
 from app.system_actions import SystemActions
 from app.utils import setup_logging, get_dark_theme, load_midi_mapping, get_media_controls, load_button_config, get_action_types, save_button_config
 import tkinter as tk
+import json
 
 # Try to import system tray modules
 try:
@@ -458,7 +459,39 @@ class MIDIKeyboardApp(ctk.CTk):
             text_color=TEXT_COLOR,
             font=("Roboto", 12, "bold")
         )
-        self.slider_label.pack(side="top", pady=(0, 15))
+        self.slider_label.pack(side="top", pady=(0, 5))  # Reduced bottom padding
+        
+        # Load saved slider state
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), "config", "slider_config.json")
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    slider_config = json.load(f)
+                    initial_state = slider_config.get("enabled", True)
+            else:
+                initial_state = True
+        except Exception as e:
+            logger.error(f"Failed to load slider state: {e}")
+            initial_state = True
+
+        # Create checkbox with loaded state
+        self.slider_enabled_var = ctk.BooleanVar(value=initial_state)
+        self.slider_enabled_checkbox = ctk.CTkCheckBox(
+            slider_center_frame,
+            text="Enable",
+            variable=self.slider_enabled_var,
+            command=self.toggle_slider,
+            width=20,
+            height=20,
+            checkbox_width=16,
+            checkbox_height=16,
+            fg_color=PRIMARY_COLOR,
+            hover_color=BUTTON_ACTIVE_COLOR,
+            border_color="#555555",
+            text_color=TEXT_COLOR,
+            font=("Roboto", 10)
+        )
+        self.slider_enabled_checkbox.pack(side="top", pady=(0, 15))
         
         # Create slider container with border to look more like a MIDI keyboard slider
         slider_container = ctk.CTkFrame(
@@ -489,6 +522,14 @@ class MIDIKeyboardApp(ctk.CTk):
         self.slider_widget.pack(side="top", pady=10, padx=10)
         self.slider_widget.set(0)  # Initialize to 0
         self.button_widgets[slider_id] = self.slider_widget  # Add slider to button widgets
+        
+        # Apply initial state to slider if disabled
+        if not initial_state:
+            self.slider_widget.configure(
+                button_color="#555555",
+                progress_color="#444444",
+                state="disabled"
+            )
         
         # RIGHT SECTION - Main pad layout (6 buttons top row, 6 buttons bottom row)
         self.pads_frame = ctk.CTkFrame(self.keyboard_frame, fg_color=DARK_BG)
@@ -752,18 +793,20 @@ class MIDIKeyboardApp(ctk.CTk):
                     
                     # Check if it's the slider (control 9)
                     elif control == 9:
-                        # This is the physical slider on the MIDI controller (control 9)
-                        # Update slider value if we have a slider
-                        slider_id = "sliderA"  # This is the slider ID defined in the mapping
-                        
-                        # Normalize to 0-100
+                        # First check if slider is enabled
+                        if not self.slider_enabled_var.get():
+                            logger.debug("Slider is disabled, ignoring MIDI message")
+                            return
+                            
+                        # This is the physical slider on the MIDI controller
                         normalized_value = int((value / 127) * 100)
                         
-                        # Update slider position in UI
+                        # Update slider UI if enabled
                         if hasattr(self, 'slider_widget'):
                             self.slider_widget.set(normalized_value)
                         
-                        # Execute slider action for volume control
+                        # Execute slider action
+                        slider_id = "sliderA"
                         if str(slider_id) in self.button_config:
                             self.execute_button_action(slider_id, normalized_value)
                         else:
@@ -855,11 +898,15 @@ class MIDIKeyboardApp(ctk.CTk):
                     
                     # Check if it's the slider (control 9)
                     elif control == 9:
+                        # First check if slider is enabled
+                        if not self.slider_enabled_var.get():
+                            logger.debug("Slider is disabled, ignoring MIDI message")
+                            return
+                            
                         # This is the physical slider on the MIDI controller
-                        # Normalize to 0-100
                         normalized_value = int((value / 127) * 100)
                         
-                        # Update slider UI
+                        # Update slider UI if enabled
                         if hasattr(self, 'slider_widget'):
                             self.slider_widget.set(normalized_value)
                         
@@ -1724,6 +1771,40 @@ class MIDIKeyboardApp(ctk.CTk):
                 self.after(5000, lambda: self.message_label.configure(text="Ready"))
             except Exception as e:
                 logger.error(f"Failed to update message label: {e}")
+
+    def toggle_slider(self):
+        """Enable or disable slider functionality"""
+        # Save slider state to config
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), "config", "slider_config.json")
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            
+            with open(config_path, 'w') as f:
+                json.dump({"enabled": self.slider_enabled_var.get()}, f)
+        except Exception as e:
+            logger.error(f"Failed to save slider state: {e}")
+
+        if not self.slider_enabled_var.get():
+            # Store current value before disabling
+            self._previous_slider_value = self.slider_widget.get()
+            self.slider_widget.set(0)
+            self.slider_widget.configure(
+                button_color="#555555",
+                progress_color="#444444",
+                state="disabled"
+            )
+            self.show_message("Slider disabled")
+        else:
+            # Re-enable slider and restore colors
+            self.slider_widget.configure(
+                button_color="#00CED1",
+                progress_color="#FF1493",
+                state="normal"
+            )
+            if hasattr(self, '_previous_slider_value'):
+                self.slider_widget.set(self._previous_slider_value)
+                self.system_actions.set_volume("set", int(self._previous_slider_value))
+            self.show_message("Slider enabled")
 
 if __name__ == "__main__":
     app = MIDIKeyboardApp()
