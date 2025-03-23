@@ -1,0 +1,1 @@
+# Logs directory for WORLDE EASYPAD.12 Controller 

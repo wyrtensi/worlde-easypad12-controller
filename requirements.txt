@@ -1,0 +1,12 @@
+customtkinter
+python-rtmidi
+pillow
+psutil
+pystray
+pyautogui
+olefile=
+pycaw
+comtypes
+pathlib
+pywin32
+python-dateutil
