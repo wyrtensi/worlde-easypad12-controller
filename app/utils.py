@@ -32,12 +32,6 @@ logger.setLevel(logging.DEBUG)
 # Create formatter for use throughout the module
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Console handler
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-ch.setFormatter(formatter)
-logger.addHandler(ch)
-
 def get_app_root():
     """Get the application root directory"""
     if getattr(sys, 'frozen', False):
@@ -172,6 +166,10 @@ def get_action_types():
         "app": {
             "name": "Launch Application",
             "description": "Launch a desktop application when the button is pressed."
+      },
+        "toggle_app": {
+            "name": "Toggle Application",
+            "description": "Start the application if it's not running, or kill it if it is running."
         },
         "web": {
             "name": "Open Website",
@@ -286,6 +284,13 @@ def load_button_config(button_id):
         try:
             with open(config_file, 'r') as f:
                 config = json.load(f)
+                # Handle backward compatibility for command and powershell
+                if config.get("action_type") in ["command", "powershell"]:
+                    action_data = config.get("action_data", {})
+                    if "command" in action_data and "commands" not in action_data:
+                        # Convert single command to list
+                        config["action_data"]["commands"] = [{"command": action_data["command"], "delay_ms": 0}]
+                        del action_data["command"]
                 logger.info(f"Loaded configuration for button {button_id}")
                 return config
         except Exception as e:

@@ -4,7 +4,7 @@ pillow
 psutil
 pystray
 pyautogui
-olefile=
+olefile
 pycaw
 comtypes
 pathlib

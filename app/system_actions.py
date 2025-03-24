@@ -10,8 +10,10 @@ from app.utils import ensure_app_directories, save_button_config, get_saved_butt
 import platform
 import sys
 import time
+import threading
 import importlib.util
 from typing import Optional
+import psutil
 
 try:
     import pyautogui
@@ -110,6 +112,45 @@ class SystemActions:
         except Exception as e:
             logger.error(f"Failed to open application: {e}")
             return False
+    
+    def toggle_application(self, action_params):
+        """Toggle an application: run if not running, kill if running"""
+        path = action_params.get("path", "")
+        args = action_params.get("args", "")
+        if not path:
+            logger.error("No application path provided for toggle_app action")
+            return False
+        
+        # Get the executable name
+        exe_name = os.path.basename(path)
+        
+        # Check if the process is running
+        running = False
+        for proc in psutil.process_iter(['name']):
+            if proc.info['name'] and proc.info['name'].lower() == exe_name.lower():
+                running = True
+                break
+        
+        if running:
+            # Kill all instances of the process
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] and proc.info['name'].lower() == exe_name.lower():
+                    try:
+                        proc.kill()
+                        logger.info(f"Killed process: {proc.info['name']}")
+                    except psutil.NoSuchProcess:
+                        pass
+            return True
+        else:
+            # Start the application
+            full_command = f'"{path}" {args}' if args else f'"{path}"'
+            try:
+                subprocess.Popen(full_command, shell=True)
+                logger.info(f"Started application: {full_command}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to start application: {e}")
+                return False
     
     def open_website(self, action_params):
         """Open a website in the default browser
@@ -777,6 +818,9 @@ class SystemActions:
             if action_type == "app":
                 return self.launch_application(action_params)
             
+            elif action_type == "toggle_app":
+                return self.toggle_application(action_params)        
+                
             elif action_type == "web":
                 return self.open_website(action_params)
             
@@ -806,7 +850,13 @@ class SystemActions:
                 return self.type_text(action_params)
             
             elif action_type == "command":
-                return self.run_command(action_params)
+                commands = action_params.get("commands", [])
+                if not commands:
+                    logger.error("No commands specified for command action")
+                    return False
+                # Start a thread to execute commands with delays
+                threading.Thread(target=self.execute_commands_with_delays, args=(commands,)).start()
+                return True
             
             elif action_type == "window":
                 return self.control_window(action_params)
@@ -821,7 +871,13 @@ class SystemActions:
                 return self.toggle_setting(action_params)
             
             elif action_type == "powershell":
-                return self.run_powershell_command(action_params)
+                commands = action_params.get("commands", [])
+                if not commands:
+                    logger.error("No PowerShell commands specified")
+                    return False
+    # Start a thread to execute PowerShell commands with delays
+                threading.Thread(target=self.execute_powershell_commands_with_delays, args=(commands,)).start()
+                return True
             
             else:
                 logger.error(f"Unknown action type: {action_type}")
@@ -1122,6 +1178,53 @@ class SystemActions:
         except Exception as e:
             logger.error(f"Error executing PowerShell command: {e}")
             return False
+
+    def execute_commands_with_delays(self, commands):
+        """Execute a list of commands with their respective delays"""
+        for cmd_data in commands:
+            command = cmd_data.get("command", "")
+            delay_ms = cmd_data.get("delay_ms", 0)
+            if command:
+                # Sleep for the delay
+                time.sleep(delay_ms / 1000.0)
+                # Run the command
+                try:
+                    subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True
+                    )
+                    logger.info(f"Executed command: {command}")
+                except Exception as e:
+                    logger.error(f"Failed to execute command '{command}': {e}")
+
+    def execute_powershell_commands_with_delays(self, commands):
+        """Execute a list of PowerShell commands with their respective delays"""
+        for cmd_data in commands:
+            command = cmd_data.get("command", "")
+            delay_ms = cmd_data.get("delay_ms", 0)
+            if command:
+                # Sleep for the delay
+                time.sleep(delay_ms / 1000.0)
+                # Run the PowerShell command
+                try:
+                    ps_command = f'powershell.exe -NoProfile -NonInteractive -Command "{command}"'
+                    process = subprocess.Popen(
+                        ps_command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        shell=True
+                    )
+                    output, error = process.communicate()
+                    if process.returncode != 0:
+                        logger.error(f"PowerShell command failed: {error.decode()}")
+                    else:
+                        logger.info(f"Executed PowerShell command: {command}")
+                        logger.debug(f"PowerShell output: {output.decode()}")
+                except Exception as e:
+                    logger.error(f"Failed to execute PowerShell command '{command}': {e}")
 
 def execute_shortcut(shortcut: str):
     """Executes a keyboard shortcut using pyautogui."""

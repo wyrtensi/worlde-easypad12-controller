@@ -1199,6 +1199,49 @@ class MIDIKeyboardApp(ctk.CTk):
             )
             required_label.pack(fill="x", padx=10, pady=5)
             
+        elif action_type == "toggle_app":
+            # Application path
+            path_frame = ctk.CTkFrame(self.action_form_frame)
+            path_frame.pack(fill="x", padx=10, pady=5)
+            
+            path_label = ctk.CTkLabel(path_frame, text="Application Path:")
+            path_label.pack(side="left", padx=5)
+            
+            path_var = tk.StringVar(value=existing_data.get("path", ""))
+            path_entry = ctk.CTkEntry(path_frame, width=200, textvariable=path_var)
+            path_entry.pack(side="left", padx=5, fill="x", expand=True)
+            
+            browse_button = ctk.CTkButton(
+                path_frame, 
+                text="Browse", 
+                width=70,
+                command=lambda: self.browse_file(path_var)
+            )
+            browse_button.pack(side="right", padx=5)
+            
+            self.form_values["path"] = path_var
+            
+            # Optional arguments
+            args_frame = ctk.CTkFrame(self.action_form_frame)
+            args_frame.pack(fill="x", padx=10, pady=5)
+            
+            args_label = ctk.CTkLabel(args_frame, text="Arguments (optional):")
+            args_label.pack(side="left", padx=5)
+            
+            args_var = tk.StringVar(value=existing_data.get("args", ""))
+            args_entry = ctk.CTkEntry(args_frame, width=200, textvariable=args_var)
+            args_entry.pack(side="left", padx=5, fill="x", expand=True)
+            
+            self.form_values["args"] = args_var
+            
+            # Required field indicator
+            required_label = ctk.CTkLabel(
+                self.action_form_frame, 
+                text="* Application Path is required",
+                text_color="orange"
+            )
+            required_label.pack(fill="x", padx=10, pady=5)
+            
         elif action_type == "web":
             # Website URL
             url_frame = ctk.CTkFrame(self.action_form_frame)
@@ -1413,23 +1456,41 @@ class MIDIKeyboardApp(ctk.CTk):
             help_note.pack(anchor="w", padx=5, pady=5)
         
         elif action_type == "command":
-            # System command
-            command_frame = ctk.CTkFrame(self.action_form_frame)
-            command_frame.pack(fill="x", padx=10, pady=5)
-            
-            command_label = ctk.CTkLabel(command_frame, text="Command:")
-            command_label.pack(side="left", padx=5)
-            
-            command_var = tk.StringVar(value=existing_data.get("command", ""))
-            command_entry = ctk.CTkEntry(command_frame, width=200, textvariable=command_var)
-            command_entry.pack(side="left", padx=5, fill="x", expand=True)
-            
-            self.form_values["command"] = command_var
-            
+            # System commands with delays
+            commands_frame = ctk.CTkFrame(self.action_form_frame)
+            commands_frame.pack(fill="x", padx=10, pady=5)
+    
+            # Pad the commands list to exactly 3 elements
+            commands_list = (existing_data.get("commands", []) + [{}]*3)[:3]
+    
+            for i in range(3):
+                command_delay_frame = ctk.CTkFrame(commands_frame)
+                command_delay_frame.pack(fill="x", pady=2)
+        
+                # Command label and entry
+                command_label = ctk.CTkLabel(command_delay_frame, text=f"Command {i+1}:")
+                command_label.pack(side="left", padx=5)
+        
+                command_var = tk.StringVar(value=commands_list[i].get("command", ""))
+                command_entry = ctk.CTkEntry(command_delay_frame, width=200, textvariable=command_var)
+                command_entry.pack(side="left", padx=5, fill="x", expand=True)
+        
+                # Delay label and entry
+                delay_label = ctk.CTkLabel(command_delay_frame, text="Delay (ms):")
+                delay_label.pack(side="left", padx=5)
+        
+                delay_var = tk.StringVar(value=str(commands_list[i].get("delay_ms", 0)))
+                delay_entry = ctk.CTkEntry(command_delay_frame, width=50, textvariable=delay_var)
+                delay_entry.pack(side="left", padx=5)
+        
+                # Store in form_values
+                self.form_values[f"command_{i}"] = command_var
+                self.form_values[f"delay_{i}"] = delay_var
+
             # Help text
             help_label = ctk.CTkLabel(
                 self.action_form_frame, 
-                text="Enter a system command to execute (e.g., notepad.exe, ping google.com)",
+                text="Enter up to 3 system commands with delays (e.g., notepad.exe, ping google.com)",
                 text_color="gray"
             )
             help_label.pack(fill="x", padx=10, pady=5)
@@ -1464,23 +1525,41 @@ class MIDIKeyboardApp(ctk.CTk):
             help_label.pack(fill="x", padx=10, pady=5)
         
         elif action_type == "powershell":
-            # PowerShell command
-            ps_frame = ctk.CTkFrame(self.action_form_frame)
-            ps_frame.pack(fill="x", padx=10, pady=5)
-            
-            ps_label = ctk.CTkLabel(ps_frame, text="PowerShell Command:")
-            ps_label.pack(side="left", padx=5)
-            
-            ps_var = tk.StringVar(value=existing_data.get("command", ""))
-            ps_entry = ctk.CTkEntry(ps_frame, width=200, textvariable=ps_var)
-            ps_entry.pack(side="left", padx=5, fill="x", expand=True)
-            
-            self.form_values["command"] = ps_var
-            
+            # PowerShell commands with delays
+            commands_frame = ctk.CTkFrame(self.action_form_frame)
+            commands_frame.pack(fill="x", padx=10, pady=5)
+    
+            # Pad the commands list to exactly 3 elements
+            commands_list = (existing_data.get("commands", []) + [{}]*3)[:3]
+    
+            for i in range(3):
+                command_delay_frame = ctk.CTkFrame(commands_frame)
+                command_delay_frame.pack(fill="x", pady=2)
+        
+                # Command label and entry
+                command_label = ctk.CTkLabel(command_delay_frame, text=f"PS Command {i+1}:")
+                command_label.pack(side="left", padx=5)
+        
+                command_var = tk.StringVar(value=commands_list[i].get("command", ""))
+                command_entry = ctk.CTkEntry(command_delay_frame, width=200, textvariable=command_var)
+                command_entry.pack(side="left", padx=5, fill="x", expand=True)
+        
+                # Delay label and entry
+                delay_label = ctk.CTkLabel(command_delay_frame, text="Delay (ms):")
+                delay_label.pack(side="left", padx=5)
+        
+                delay_var = tk.StringVar(value=str(commands_list[i].get("delay_ms", 0)))
+                delay_entry = ctk.CTkEntry(command_delay_frame, width=50, textvariable=delay_var)
+                delay_entry.pack(side="left", padx=5)
+        
+                # Store in form_values
+                self.form_values[f"ps_command_{i}"] = command_var
+                self.form_values[f"ps_delay_{i}"] = delay_var
+
             # Help text
             help_label = ctk.CTkLabel(
                 self.action_form_frame, 
-                text="Enter a PowerShell command to execute (e.g., Get-Process, Get-Service)",
+                text="Enter up to 3 PowerShell commands with delays (e.g., Get-Process, Get-Service)",
                 text_color="gray"
             )
             help_label.pack(fill="x", padx=10, pady=5)
@@ -1562,6 +1641,15 @@ class MIDIKeyboardApp(ctk.CTk):
                 "path": self.form_values["path"].get(),
                 "args": self.form_values["args"].get()
             }
+        elif action_type == "toggle_app":
+            if not self.form_values.get("path") or not self.form_values["path"].get():
+                self.show_message("Error: Application path is required")
+                return
+                
+            action_data = {
+                "path": self.form_values["path"].get(),
+                "args": self.form_values["args"].get()
+            }
         elif action_type == "web":
             if not self.form_values.get("url") or not self.form_values["url"].get():
                 self.show_message("Error: URL is required")
@@ -1598,13 +1686,21 @@ class MIDIKeyboardApp(ctk.CTk):
                 "device_name": self.form_values["device_name"].get()
             }
         elif action_type == "command":
-            if not self.form_values.get("command") or not self.form_values["command"].get():
-                self.show_message("Error: Command is required")
+            commands = []
+            for i in range(3):
+                command = self.form_values.get(f"command_{i}", tk.StringVar()).get().strip()
+                delay_str = self.form_values.get(f"delay_{i}", tk.StringVar()).get().strip()
+                if command:
+                    try:
+                        delay_ms = int(delay_str) if delay_str else 0
+                        commands.append({"command": command, "delay_ms": delay_ms})
+                    except ValueError:
+                        self.show_message(f"Error: Invalid delay value for command {i+1}")
+                        return
+            if not commands:
+                self.show_message("Error: At least one command is required")
                 return
-            
-            action_data = {
-                "command": self.form_values["command"].get()
-            }
+            action_data = {"commands": commands}
         elif action_type == "text":
             if not self.form_values.get("text") or not self.form_values["text"].get():
                 self.show_message("Error: Text is required")
@@ -1614,13 +1710,21 @@ class MIDIKeyboardApp(ctk.CTk):
                 "text": self.form_values["text"].get()
             }
         elif action_type == "powershell":
-            if not self.form_values.get("command") or not self.form_values["command"].get():
-                self.show_message("Error: PowerShell command is required")
+            commands = []
+            for i in range(3):
+                command = self.form_values.get(f"ps_command_{i}", tk.StringVar()).get().strip()
+                delay_str = self.form_values.get(f"ps_delay_{i}", tk.StringVar()).get().strip()
+                if command:
+                    try:
+                        delay_ms = int(delay_str) if delay_str else 0
+                        commands.append({"command": command, "delay_ms": delay_ms})
+                    except ValueError:
+                        self.show_message(f"Error: Invalid delay value for PowerShell command {i+1}")
+                        return
+            if not commands:
+                self.show_message("Error: At least one PowerShell command is required")
                 return
-            
-            action_data = {
-                "command": self.form_values["command"].get()
-            }
+            action_data = {"commands": commands}
         
         # Create config object
         config = {
