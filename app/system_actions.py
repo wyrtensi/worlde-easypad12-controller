@@ -211,7 +211,7 @@ class SystemActions:
                     if action == "set" and value is not None:
                         # Convert the slider's 0-127 value to 0-100 scale, then to fraction
                         # For example, you can map the slider value linearly:
-                        percent_value = int((value / 127) * 100)
+                        percent_value = int((value / 127) * 127)
                         new_vol = max(0, min(percent_value, 100)) / 100.0
                         volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
                         self.logger.info(f"Volume set to {percent_value}%")
