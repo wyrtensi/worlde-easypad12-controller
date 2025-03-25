@@ -10,3 +10,6 @@ comtypes
 pathlib
 pywin32
 python-dateutil
+SpeechRecognition
+pyaudio
+pyperclip
