@@ -10,6 +10,7 @@ Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.1
 - Intuitive interface that matches the exact layout of your MIDI keyboard
 - Easily assign different actions to each button:
   - Launch applications, files and windows apps shortcuts
+  - Toggle applications
   - Open websites
   - Control system volume with the slider
   - Switch between audio output devices
@@ -17,6 +18,7 @@ Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.1
   - Run powershell commands
   - Run system commands
   - Media controls (play/pause, next/previous track, volume)
+  - Speech to text
 - Beautiful dark-themed UI with teal and pink accents
 - Save and load your button configurations
 - Minimize to system tray for background operation
