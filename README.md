@@ -2,7 +2,8 @@
 Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.12
 
 ![image](https://github.com/user-attachments/assets/09daa980-20fd-437d-b9cd-d07039c3ac9c)
-![image](https://github.com/user-attachments/assets/574ec4b6-9aa7-405e-a000-8c92ae3e04b5)
+![image](https://github.com/user-attachments/assets/b9716e5f-e407-4a46-8732-c89fcc120051)
+
 
 ## Features
 
