@@ -218,6 +218,10 @@ def get_action_types():
         "setting": {
             "name": "Toggle Setting",
             "description": "Toggle system settings (night mode, airplane mode, etc.)."
+        },
+        "speech_to_text": {
+            "name": "Speech to Text",
+            "description": "Recognize speech and type it as text while holding the button."
         }
     }
 

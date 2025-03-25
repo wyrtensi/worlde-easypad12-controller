@@ -9,6 +9,9 @@ from app.system_actions import SystemActions
 from app.utils import setup_logging, get_dark_theme, load_midi_mapping, get_media_controls, load_button_config, get_action_types, save_button_config
 import tkinter as tk
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Try to import system tray modules
 try:
@@ -116,6 +119,12 @@ class MIDIKeyboardApp(ctk.CTk):
         
         # Initialize button config
         self.button_config = {}
+        
+        # Initialize speech recognition tracking
+        self.active_recognition_button = None
+        self.active_recognition_stop = None
+        self.mic_source = None
+        self.is_recognition_active = False
         
         # Initialize controllers
         self.midi_controller = MIDIController(callback=self.on_midi_message)
@@ -752,15 +761,27 @@ class MIDIKeyboardApp(ctk.CTk):
                         if note in controls:
                             button_id = note
                     
-                    # If we found a mapping, trigger button action
+                    # If we found a mapping, handle it
                     if button_id is not None:
-                        # Execute button action
-                        self.execute_button_action(button_id)
+                        config = self.button_config.get(str(button_id))
+                        if config and config.get('action_type') == 'speech_to_text' and config.get('enabled', True):
+                            language = config['action_data'].get('language', 'en-US')
+                            self.start_speech_recognition(button_id, language)
+                        else:
+                            # Execute button action for other types
+                            self.execute_button_action(button_id)
                         
                         # Change button color briefly for feedback
                         if button_id in self.button_widgets:
                             button = self.button_widgets[button_id]
                             self.flash_button(button)
+                
+                # Check if this is a Note Off message (128-143) or Note On with velocity 0
+                elif (128 <= status_byte <= 143) or (144 <= status_byte <= 159 and data2 == 0):
+                    note = data1
+                    button_id = note
+                    if str(button_id) in self.button_config and self.button_config[str(button_id)].get('action_type') == 'speech_to_text':
+                        self.stop_speech_recognition(button_id)
                 
                 # Check if this is a Control Change message (176-191)
                 elif 176 <= status_byte <= 191:
@@ -769,7 +790,6 @@ class MIDIKeyboardApp(ctk.CTk):
                     logger.debug(f"Control change: {control} with value {value}")
                     
                     # Map control numbers to specific buttons
-                    # These mappings are based on the MIDI logs you provided
                     control_to_button = {
                         44: 8,  # Button 8
                         45: 4,  # Button 4
@@ -780,17 +800,23 @@ class MIDIKeyboardApp(ctk.CTk):
                     }
                     
                     # Handle buttons 3-8 (control numbers 44-49)
-                    if control in control_to_button and value > 0:
+                    if control in control_to_button:
                         button_id = control_to_button[control]
-                        logger.debug(f"Mapped control {control} to button {button_id}")
-                        
-                        # Execute button action
-                        self.execute_button_action(button_id)
-                        
-                        # Change button color briefly for feedback
-                        if button_id in self.button_widgets:
-                            button = self.button_widgets[button_id]
-                            self.flash_button(button)
+                        config = self.button_config.get(str(button_id))
+                        if config and config.get('action_type') == 'speech_to_text' and config.get('enabled', True):
+                            if value > 0:
+                                language = config['action_data'].get('language', 'en-US')
+                                self.start_speech_recognition(button_id, language)
+                            else:
+                                self.stop_speech_recognition(button_id)
+                        else:
+                            if value > 0:
+                                # Execute button action for other types
+                                self.execute_button_action(button_id)
+                                # Change button color briefly for feedback
+                                if button_id in self.button_widgets:
+                                    button = self.button_widgets[button_id]
+                                    self.flash_button(button)
                     
                     # Check if it's the slider (control 9)
                     elif control == 9:
@@ -836,93 +862,86 @@ class MIDIKeyboardApp(ctk.CTk):
             
             # Handle mido message format
             elif hasattr(message, 'type'):
-                # Handle note on/off messages
                 if message.type == 'note_on' and message.velocity > 0:
-                    # Extract note and velocity
                     note = message.note
                     velocity = message.velocity
                     logger.debug(f"Note ON: {note} with velocity {velocity}")
                     
-                    # Convert note to button ID based on our mapping
                     button_id = None
                     
-                    # Check rows for matches
                     for row_idx, row in enumerate(self.mapping["layout"]["rows"]):
                         if note in row:
                             button_id = note
                             break
                     
-                    # Check controls for matches
                     if button_id is None and "controls" in self.mapping["layout"]:
                         controls = self.mapping["layout"]["controls"]
                         if note in controls:
                             button_id = note
                     
-                    # If we found a mapping, trigger button action
                     if button_id is not None:
-                        # Execute button action
-                        self.execute_button_action(button_id)
+                        config = self.button_config.get(str(button_id))
+                        if config and config.get('action_type') == 'speech_to_text' and config.get('enabled', True):
+                            language = config['action_data'].get('language', 'en-US')
+                            self.start_speech_recognition(button_id, language)
+                        else:
+                            self.execute_button_action(button_id)
                         
-                        # Change button color briefly for feedback
                         if button_id in self.button_widgets:
                             button = self.button_widgets[button_id]
                             self.flash_button(button)
                 
-                # Handle control change messages
+                elif message.type == 'note_off' or (message.type == 'note_on' and message.velocity == 0):
+                    note = message.note
+                    button_id = note
+                    if str(button_id) in self.button_config and self.button_config[str(button_id)].get('action_type') == 'speech_to_text':
+                        self.stop_speech_recognition(button_id)
+                
                 elif message.type == 'control_change':
                     control = message.control
                     value = message.value
                     logger.debug(f"Control change: {control} with value {value}")
                     
-                    # Map control numbers to specific buttons
                     control_to_button = {
-                        44: 8,  # Button 8
-                        45: 4,  # Button 4
-                        46: 7,  # Button 7
-                        47: 3,  # Button 3
-                        48: 5,  # Button 5
-                        49: 6   # Button 6
+                        44: 8, 45: 4, 46: 7, 47: 3, 48: 5, 49: 6
                     }
                     
-                    # Handle buttons 3-8 (control numbers 44-49)
-                    if control in control_to_button and value > 0:
+                    if control in control_to_button:
                         button_id = control_to_button[control]
-                        logger.debug(f"Mapped control {control} to button {button_id}")
-                        
-                        # Execute button action
-                        self.execute_button_action(button_id)
-                        
-                        # Change button color briefly for feedback
-                        if button_id in self.button_widgets:
-                            button = self.button_widgets[button_id]
-                            self.flash_button(button)
+                        config = self.button_config.get(str(button_id))
+                        if config and config.get('action_type') == 'speech_to_text' and config.get('enabled', True):
+                            if value > 0:
+                                language = config['action_data'].get('language', 'en-US')
+                                self.start_speech_recognition(button_id, language)
+                            else:
+                                self.stop_speech_recognition(button_id)
+                        else:
+                            if value > 0:
+                                self.execute_button_action(button_id)
+                                if button_id in self.button_widgets:
+                                    button = self.button_widgets[button_id]
+                                    self.flash_button(button)
                     
-                    # Check if it's the slider (control 9)
                     elif control == 9:
-                        # First check if slider is enabled
                         if not self.slider_enabled_var.get():
                             logger.debug("Slider is disabled, ignoring MIDI message")
                             return
                             
-                        # This is the physical slider on the MIDI controller
                         normalized_value = int((value / 127) * 100)
                         
-                        # Update slider UI if enabled
                         if hasattr(self, 'slider_widget'):
                             self.slider_widget.set(normalized_value)
                         
-                        # Execute slider action
                         slider_id = "sliderA"
                         if str(slider_id) in self.button_config:
                             self.execute_button_action(slider_id, normalized_value)
                         else:
-                            # Default volume control if no specific config
                             success = self.system_actions.set_volume("set", normalized_value)
                             if success:
                                 self.show_message(f"Volume set to {normalized_value}%")
                             else:
                                 self.show_message("Failed to set volume")
-                
+        
         except Exception as e:
             logger.error(f"Error handling MIDI message: {e}")
             self.show_message(f"MIDI error: {e}")
@@ -1584,6 +1603,47 @@ class MIDIKeyboardApp(ctk.CTk):
             )
             warning_label.pack(fill="x", padx=10, pady=5)
         
+        elif action_type == "speech_to_text":
+            # Language selection frame
+            language_frame = ctk.CTkFrame(self.action_form_frame)
+            language_frame.pack(fill="x", padx=10, pady=5)
+            
+            language_label = ctk.CTkLabel(language_frame, text="Language:")
+            language_label.pack(side="left", padx=5)
+            
+            # Define language options
+            languages = [
+                ("English", "en-US"),
+                ("Russian", "ru-RU"),
+                ("Combined (Experimental)", "ru-RU,en-US")
+            ]
+            self.language_map = {lang[0]: lang[1] for lang in languages}
+            self.language_display_map = {v: k for k, v in self.language_map.items()}
+            
+            # Get existing language or default to English
+            language_code = existing_data.get("language", "en-US")
+            language_display = self.language_display_map.get(language_code, "English")
+            language_var = tk.StringVar(value=language_display)
+            
+            # Create dropdown menu
+            language_menu = ctk.CTkOptionMenu(
+                language_frame,
+                values=[lang[0] for lang in languages],
+                variable=language_var,
+                width=120
+            )
+            language_menu.pack(side="left", padx=5)
+            
+            self.form_values["language_display"] = language_var
+            
+            # Help text
+            help_label = ctk.CTkLabel(
+                self.action_form_frame,
+                text="Hold the button to type speech in the selected language. Combined mode is experimental.",
+                text_color="gray"
+            )
+            help_label.pack(fill="x", padx=10, pady=5)
+            
         else:
             # Unknown or unimplemented action type
             unknown_label = ctk.CTkLabel(
@@ -1738,6 +1798,12 @@ class MIDIKeyboardApp(ctk.CTk):
                 self.show_message("Error: At least one PowerShell command is required")
                 return
             action_data = {"commands": commands}
+        elif action_type == "speech_to_text":
+            language_display = self.form_values["language_display"].get()
+            language_code = self.language_map.get(language_display, "en-US")
+            action_data = {
+                "language": language_code
+            }
         
         # Create config object
         config = {
@@ -1888,6 +1954,70 @@ class MIDIKeyboardApp(ctk.CTk):
                 self.after(5000, lambda: self.message_label.configure(text="Ready"))
             except Exception as e:
                 logger.error(f"Failed to update message label: {e}")
+
+    def start_speech_recognition(self, button_id, language):
+        try:
+            import speech_recognition as sr
+            import pyautogui
+            import pyperclip
+        except ImportError as e:
+            logger.error(f"Required library not installed: {e}")
+            self.show_message(f"Error: Please install {e}")
+            return
+
+        # If recognition is active for this button, stop it first to reset
+        if self.active_recognition_button == button_id and self.active_recognition_stop:
+            self.stop_speech_recognition(button_id)
+
+        # If recognition is active for a different button, stop it
+        if self.active_recognition_button is not None and self.active_recognition_button != button_id:
+            self.stop_speech_recognition(self.active_recognition_button)
+
+        try:
+            recognizer = sr.Recognizer()
+
+            # Adjust for ambient noise with a temporary microphone
+            with sr.Microphone() as temp_source:
+                recognizer.adjust_for_ambient_noise(temp_source, duration=0.5)
+
+            # Set up the microphone for this session
+            self.mic_source = sr.Microphone()
+
+            def callback(recognizer, audio):
+                try:
+                    text = recognizer.recognize_google(audio, language=language)
+                    logger.info(f"Recognized text: {text}")
+                    pyperclip.copy(text)
+                    pyautogui.hotkey('ctrl', 'v')
+                except sr.UnknownValueError:
+                    logger.warning("Could not understand audio")
+                except sr.RequestError as e:
+                    logger.error(f"Speech recognition error: {e}")
+
+            # Start listening in the background
+            stop_listening = recognizer.listen_in_background(self.mic_source, callback)
+            self.active_recognition_stop = stop_listening
+            self.active_recognition_button = button_id
+            self.show_message("Listening for speech...")
+        except Exception as e:
+            logger.error(f"Failed to start speech recognition: {e}")
+            self.show_message(f"Error: {e}")
+
+    def stop_speech_recognition(self, button_id):
+        if self.active_recognition_button == button_id and self.active_recognition_stop is not None:
+            try:
+                # Stop the background listening
+                self.active_recognition_stop(wait_for_stop=True)
+                # Close the microphone only if it exists
+                if hasattr(self, 'mic_source') and self.mic_source is not None:
+                    self.mic_source.__exit__(None, None, None)
+                    self.mic_source = None
+                self.active_recognition_stop = None
+                self.active_recognition_button = None
+                self.show_message("Speech recognition stopped")
+            except Exception as e:
+                logger.error(f"Error stopping speech recognition: {e}")
+                self.show_message(f"Error stopping speech recognition: {e}")
 
     def toggle_slider(self):
         """Enable or disable slider functionality"""
