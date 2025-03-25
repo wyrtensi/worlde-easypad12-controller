@@ -38,128 +38,250 @@ TEXT_COLOR = theme["text_color"]
 class MIDIKeyboardApp(ctk.CTk):
     def __init__(self):
         """Initialize the app"""
-        # Setup window
         super().__init__()
         self.title("WORLDE EASYPAD.12 Controller")
-        self.geometry("1000x340")
-        self.minsize(1000, 350)
-        self.maxsize(1000, 350)
+        self.geometry("1200x600")
+        self.minsize(1000, 400)
         
-        # Create a cool MIDI controller icon
-        self.icon_image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))  # Transparent background
-        draw = ImageDraw.Draw(self.icon_image)
+        # Create modern app icon
+        self.icon_image = self.create_modern_icon()
+        self.iconphoto(True, self.icon_image)
         
-        # Draw main controller body
-        body_color = PRIMARY_COLOR
-        border_color = HIGHLIGHT_COLOR
-        dark_accent = "#1A1A1A"
-        
-        # Main body (rectangle with rounded corners)
-        draw.rounded_rectangle(
-            [(8, 8), (56, 56)],
-            radius=5,
-            fill=body_color,
-            outline=border_color,
-            width=2
-        )
-        
-        # Draw slider
-        draw.rectangle(
-            [(16, 16), (24, 48)],
-            fill=dark_accent,
-            outline=border_color
-        )
-        draw.rectangle(
-            [(16, 32), (24, 40)],
-            fill=HIGHLIGHT_COLOR
-        )
-        
-        # Draw pad matrix (2x3)
-        pad_positions = [
-            (32, 16), (42, 16), (52, 16),  # Top row
-            (32, 36), (42, 36), (52, 36)   # Bottom row
-        ]
-        
-        for x, y in pad_positions:
-            # Draw pad background
-            draw.rectangle(
-                [(x-6, y-6), (x+6, y+6)],
-                fill=dark_accent,
-                outline=border_color
-            )
-            # Add highlight to make it look like a button
-            draw.line([(x-5, y-5), (x+5, y-5)], fill=HIGHLIGHT_COLOR, width=1)
-            draw.line([(x-5, y-5), (x-5, y+5)], fill=HIGHLIGHT_COLOR, width=1)
-        
-        # Convert for window icon
-        self.window_icon = ImageTk.PhotoImage(self.icon_image)
-        self.iconphoto(True, self.window_icon)  # Set to True to apply to all windows
-
         # Initialize tray icon (if available)
         self.tray_icon = None
         if TRAY_AVAILABLE:
             self.setup_tray()
-            # Start minimized to tray
             self.after(100, self.hide_to_tray)
         
         # Initialize data
         self.mapping = load_midi_mapping()
-        
-        # Create simplified mapping for buttons
-        # This makes it easier to handle button presses using consistent button IDs
-        self.button_mapping = {
-            "top_row": self.mapping["layout"]["rows"][0],
-            "bottom_row": self.mapping["layout"]["rows"][1],
-            "left_column": self.mapping["layout"]["controls"] if "controls" in self.mapping["layout"] else [],
-            "slider": self.mapping["layout"]["slider"][0] if self.mapping["layout"]["slider"] else None
-        }
-        
-        # Initialize button config
         self.button_config = {}
-        
-        # Initialize controllers
         self.midi_controller = MIDIController(callback=self.on_midi_message)
         self.system_actions = SystemActions()
         
-        # Load button configuration
-        self.load_config()
-        
-        # Track active/pressed buttons
-        self.active_buttons = set()
-        
-        # Create the main UI
+        # Create modern UI
         self.create_ui()
+        self.load_config()
         
         # Connect to MIDI device if available
         self.after(1000, self.auto_connect_midi)
         
-        # Update button labels from saved config
-        self.after(1500, self.update_button_labels_from_config)
-        
-        # Bind close event to minimize to tray if available
+        # Bind close event
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-    
-    def create_default_icon(self):
-        """Create a default icon for the app if none exists"""
-        try:
-            # Ensure assets directory exists
-            assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "assets")
-            os.makedirs(assets_dir, exist_ok=True)
+
+    def create_modern_icon(self):
+        """Create a modern vector-style icon"""
+        icon_size = 64
+        img = Image.new('RGBA', (icon_size, icon_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Draw controller outline
+        draw.rounded_rectangle(
+            (10, 10, icon_size-10, icon_size-10),
+            radius=8,
+            fill=PRIMARY_COLOR,
+            outline=HIGHLIGHT_COLOR,
+            width=2
+        )
+        
+        # Add pad indicators
+        pad_size = 8
+        for i in range(3):
+            x = 20 + i*20
+            draw.ellipse((x, 20, x+pad_size, 20+pad_size), fill=HIGHLIGHT_COLOR)
+            draw.ellipse((x, 40, x+pad_size, 40+pad_size), fill=HIGHLIGHT_COLOR)
+        
+        # Add slider indicator
+        draw.rectangle((icon_size-25, 15, icon_size-15, 45), fill=HIGHLIGHT_COLOR)
+        
+        return ImageTk.PhotoImage(img)
+
+    def create_ui(self):
+        """Create modern adaptive UI layout"""
+        # Main container with 3 columns
+        self.grid_columnconfigure((0, 1, 2), weight=1, uniform="columns")
+        self.grid_rowconfigure(0, weight=1)
+        
+        # Left Control Panel
+        self.left_frame = ctk.CTkFrame(self, fg_color=SECONDARY_COLOR)
+        self.left_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self.left_frame.grid_rowconfigure((0, 1, 2), weight=1)
+        self.left_frame.grid_columnconfigure(0, weight=1)
+        
+        # Middle Slider Panel
+        self.middle_frame = ctk.CTkFrame(self, fg_color=SECONDARY_COLOR)
+        self.middle_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.middle_frame.grid_rowconfigure(0, weight=1)
+        
+        # Right Pad Panel
+        self.right_frame = ctk.CTkFrame(self, fg_color=SECONDARY_COLOR)
+        self.right_frame.grid(row=0, column=2, padx=20, pady=20, sticky="nsew")
+        self.right_frame.grid_rowconfigure(0, weight=1)
+        self.right_frame.grid_columnconfigure(0, weight=1)
+        
+        # Status Bar
+        self.status_bar = ctk.CTkFrame(self, height=40, fg_color=DARK_BG)
+        self.status_bar.grid(row=1, column=0, columnspan=3, sticky="ew")
+        
+        # Populate Left Frame
+        self.create_left_controls()
+        self.create_middle_slider()
+        self.create_right_pads()
+        self.create_status_bar()
+
+    def create_left_controls(self):
+        """Create left control panel with 3 rows"""
+        # Control buttons frame
+        control_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        control_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        control_frame.grid_rowconfigure((0, 1, 2), weight=1)
+        control_frame.grid_columnconfigure(0, weight=1)
+        
+        # Row 1: Buttons 3,4,5
+        row1 = ctk.CTkFrame(control_frame, fg_color="transparent")
+        row1.grid(row=0, column=0, pady=5, sticky="ew")
+        row1.grid_columnconfigure((0,1,2), weight=1, uniform="row1")
+        
+        for i, btn_id in enumerate([3,4,5]):
+            self.create_control_button(row1, i, btn_id)
             
-            # Create a simple colored square icon with PIL
-            self.icon_image = Image.new('RGBA', (64, 64), color=PRIMARY_COLOR)
+        # Row 2: Buttons 6,7,8
+        row2 = ctk.CTkFrame(control_frame, fg_color="transparent")
+        row2.grid(row=1, column=0, pady=5, sticky="ew")
+        row2.grid_columnconfigure((0,1,2), weight=1, uniform="row2")
+        
+        for i, btn_id in enumerate([6,7,8]):
+            self.create_control_button(row2, i, btn_id)
             
-            # Save a copy to file system for window icon
-            self.icon_image.save(self.icon_path, format='PNG')
+        # Row 3: Buttons 1,2
+        row3 = ctk.CTkFrame(control_frame, fg_color="transparent")
+        row3.grid(row=2, column=0, pady=5, sticky="ew")
+        row3.grid_columnconfigure((0,1), weight=1, uniform="row3")
+        
+        for i, btn_id in enumerate([1,2]):
+            self.create_control_button(row3, i, btn_id)
+
+    def create_control_button(self, parent, col, btn_id):
+        """Helper to create control buttons"""
+        btn = ctk.CTkButton(
+            parent,
+            text=f"Btn {btn_id}",
+            fg_color=PRIMARY_COLOR,
+            hover_color=BUTTON_ACTIVE_COLOR,
+            corner_radius=8,
+            height=60,
+            command=lambda bid=btn_id: self.show_button_config(bid)
+        )
+        btn.grid(row=0, column=col, padx=5, pady=5, sticky="ew")
+        self.button_widgets[btn_id] = btn
+
+    def create_middle_slider(self):
+        """Create modern slider panel"""
+        # Slider container
+        slider_container = ctk.CTkFrame(self.middle_frame, fg_color="transparent")
+        slider_container.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        slider_container.grid_rowconfigure((0,1,2), weight=1)
+        
+        # Title
+        ctk.CTkLabel(
+            slider_container,
+            text="VOLUME SLIDER",
+            text_color=TEXT_COLOR,
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).grid(row=0, column=0, pady=(0,10))
+        
+        # Enable checkbox
+        self.slider_enabled_var = ctk.BooleanVar(value=True)
+        self.slider_checkbox = ctk.CTkCheckBox(
+            slider_container,
+            text="Enable Slider",
+            variable=self.slider_enabled_var,
+            checkbox_height=24,
+            checkbox_width=24,
+            font=ctk.CTkFont(size=12)
+        )
+        self.slider_checkbox.grid(row=1, column=0, pady=(0,15))
+        
+        # Slider widget
+        self.slider_widget = ctk.CTkSlider(
+            slider_container,
+            from_=0,
+            to=100,
+            orientation="vertical",
+            height=200,
+            width=24,
+            progress_color=HIGHLIGHT_COLOR,
+            button_color=PRIMARY_COLOR,
+            button_hover_color=BUTTON_ACTIVE_COLOR
+        )
+        self.slider_widget.grid(row=2, column=0, pady=20)
+        self.slider_widget.set(50)
+
+    def create_right_pads(self):
+        """Create pad grid with modern styling"""
+        pad_container = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        pad_container.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        pad_container.grid_rowconfigure((0,1), weight=1)
+        pad_container.grid_columnconfigure(tuple(range(6)), weight=1, uniform="pads")
+        
+        # Top row (1-6)
+        for i in range(6):
+            self.create_pad(pad_container, i, 40+i, row=0)
             
-            # Convert to PhotoImage for window icon
-            self.window_icon = ImageTk.PhotoImage(self.icon_image)
-            
-            # Set window icon
-            self.iconphoto(True, self.window_icon)
-            
-        except Exception as e:
-            logger.error(f"Failed to create default icon: {e}")
+        # Bottom row (7-12)
+        for i in range(6):
+            self.create_pad(pad_container, i, 46+i, row=1)
+
+    def create_pad(self, parent, col, pad_id, row):
+        """Create individual pad with modern styling"""
+        pad = ctk.CTkFrame(
+            parent,
+            fg_color=PRIMARY_COLOR,
+            corner_radius=12,
+            border_width=2,
+            border_color=HIGHLIGHT_COLOR
+        )
+        pad.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
+        pad.grid_columnconfigure(0, weight=1)
+        pad.grid_rowconfigure(0, weight=1)
+        
+        label = ctk.CTkLabel(
+            pad,
+            text=f"Pad {pad_id-39}",
+            text_color=TEXT_COLOR,
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        label.grid(row=0, column=0, padx=10, pady=10)
+        
+        # Add click binding
+        pad.bind("<Button-1>", lambda e, bid=pad_id: self.show_button_config(bid))
+        label.bind("<Button-1>", lambda e, bid=pad_id: self.show_button_config(bid))
+        
+        self.button_widgets[pad_id] = pad
+
+    def create_status_bar(self):
+        """Create modern status bar"""
+        self.status_bar.grid_columnconfigure((0,1,2), weight=1)
+        
+        # Status label
+        self.status_label = ctk.CTkLabel(
+            self.status_bar,
+            text="MIDI Device: Not Connected",
+            text_color=TEXT_COLOR,
+            font=ctk.CTkFont(size=12)
+        )
+        self.status_label.grid(row=0, column=0, padx=20, sticky="w")
+        
+        # Connection button
+        self.connect_button = ctk.CTkButton(
+            self.status_bar,
+            text="Connect",
+            fg_color=PRIMARY_COLOR,
+            hover_color=BUTTON_ACTIVE_COLOR,
+            height=30,
+            command=self.connect_to_midi
+        )
+        self.connect_button.grid(row=0, column=2, padx=20, sticky="e")
     
     def setup_tray(self):
         """Set up system tray icon and menu"""
@@ -221,7 +343,7 @@ class MIDIKeyboardApp(ctk.CTk):
         self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
         
         # Status bar at the top
-        self.status_frame = ctk.CTkFrame(self.main_frame, fg_color=DARK_BG, height=40)
+        self.status_frame = ctk.CTkFrame(self.main_frame, fg_color=DARK_BG, height=30)
         self.status_frame.pack(fill="x", pady=(0, 10))
         
         self.status_label = ctk.CTkLabel(
@@ -272,7 +394,7 @@ class MIDIKeyboardApp(ctk.CTk):
         self.button_widgets = {}
         
         # LEFT SECTION - Small buttons (3-8, 1-2)
-        self.left_section = ctk.CTkFrame(self.keyboard_frame, fg_color=DARK_BG, width=230)
+        self.left_section = ctk.CTkFrame(self.keyboard_frame, fg_color=DARK_BG, width=150)
         self.left_section.pack(side="left", padx=(20, 30), fill="y")
         self.left_section.pack_propagate(False)  # Prevent shrinking
         
@@ -445,7 +567,7 @@ class MIDIKeyboardApp(ctk.CTk):
         self.button_widgets[button_id] = button2
         
         # SLIDER SECTION
-        self.slider_frame = ctk.CTkFrame(self.keyboard_frame, fg_color=DARK_BG, width=60)
+        self.slider_frame = ctk.CTkFrame(self.keyboard_frame, fg_color=DARK_BG, width=70)
         self.slider_frame.pack(side="left", padx=(0, 30), fill="y")
         self.slider_frame.pack_propagate(False)  # Prevent shrinking
         
@@ -555,7 +677,7 @@ class MIDIKeyboardApp(ctk.CTk):
                 border_color="#555555",
                 width=60,
                 height=60,
-                corner_radius=50
+                corner_radius=3
             )
             pad_frame.grid(row=0, column=i, padx=8, pady=10, sticky="nsew")
             pad_frame.grid_propagate(False)  # Prevent shrinking
@@ -1021,14 +1143,17 @@ class MIDIKeyboardApp(ctk.CTk):
             logger.error(f"Error flashing button: {e}")
     
     def show_button_config(self, button_id):
-        """Show configuration dialog for a button"""
-        # Create a dialog for button configuration
+        """Modern configuration dialog"""
         dialog = ctk.CTkToplevel(self)
-        dialog.title(f"Configure {self.mapping['button_names'].get(str(button_id), f'Button {button_id}')}")
-        dialog.geometry("500x450")
+        dialog.title(f"Configure Button {button_id}")
+        dialog.geometry("600x500")
         dialog.transient(self)
         dialog.grab_set()
-        
+
+        # Modern form layout
+        form_frame = ctk.CTkFrame(dialog, fg_color=DARK_BG)
+        form_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
         # Load button configuration
         self.current_button_id = button_id
         self.current_config = load_button_config(button_id)
@@ -1075,27 +1200,15 @@ class MIDIKeyboardApp(ctk.CTk):
             self.update_action_form(internal_type)
         
         action_dropdown = ctk.CTkOptionMenu(
-            master=action_type_frame,
+            action_type_frame,
             values=action_display_names,
             variable=self.action_type_var,
             dynamic_resizing=False,
             width=300,
-
-            # Main button styling
-            fg_color=SECONDARY_COLOR,
-            button_color=SECONDARY_COLOR,
-            text_color=TEXT_COLOR,
-            button_hover_color="#008080",
-          
-            # Dropdown container styling (available options)
-            dropdown_fg_color=SECONDARY_COLOR,
-            dropdown_hover_color="#008080",
-            dropdown_text_color=TEXT_COLOR,
-
             command=on_action_type_change
         )
         action_dropdown.pack(side="right", fill="x", expand=True)
-
+        
         # Set initial value if exists - convert internal action type to display name
         if self.current_config.get("action_type"):
             internal_action_type = self.current_config["action_type"]
