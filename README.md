@@ -29,9 +29,13 @@ Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.1
 
 ## Prerequisites
 
-- Python 3.12 installed (only for souce files)
 - WORLDE EASYPAD.12 MIDI keyboard
 - Windows 10/11 operating system
+
+## EXE Building info
+- Python 3.12 installed (only for souce files)
+
+		pyinstaller --onefile --noconsole --icon=icon.ico --version-file version.txt --exclude-module PyQt5 --exclude-module PyQt6 run.py
 
 ## Installation
 IMPORTANT:
