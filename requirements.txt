@@ -1,4 +1,3 @@
-customtkinter
 python-rtmidi
 pillow
 psutil
@@ -13,3 +12,8 @@ python-dateutil
 SpeechRecognition
 pyaudio
 pyperclip
+keyboard
+winrt.windows.foundation
+winrt.windows.media.control
+PySide6
+qasync

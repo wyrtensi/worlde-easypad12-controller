@@ -50,6 +50,14 @@ class MIDIController:
             if self.is_connected:
                 self.disconnect()
 
+            # Refresh available ports to ensure the list is current
+            self.available_ports = self.midi_in.get_ports()
+            self.logger.info(f"Available MIDI ports: {self.available_ports}")
+
+            if not self.available_ports:
+                self.logger.warning("No MIDI devices detected by the system.")
+                return False, "No MIDI devices detected. Check connection and drivers."
+
             if port_name:
                 # Find the index of the port with the given name
                 for i, name in enumerate(self.available_ports):
@@ -58,30 +66,45 @@ class MIDIController:
                         self.port_name = name
                         break
                 else:
-                    return False, f"Device '{port_name}' not found"
+                    self.logger.warning(f"MIDI device '{port_name}' not found in available ports.")
+                    return False, f"Device '{port_name}' not found. Available ports: {self.available_ports}"
 
             if port_index is not None and 0 <= port_index < len(self.available_ports):
-                self.midi_in.open_port(port_index)
-                if not self.port_name:
+                self.logger.info(f"Attempting to connect to port {port_index}: {self.available_ports[port_index]}")
+                try:
+                    self.midi_in.open_port(port_index)
                     self.port_name = self.available_ports[port_index]
-                self.is_connected = True
-                self.logger.info(f"Connected to MIDI device: {self.port_name}")
-                return True, f"Connected to {self.port_name}"
+                    self.is_connected = True
+                    self.logger.info(f"Successfully connected to MIDI device: {self.port_name}")
+                    return True, f"Connected to {self.port_name}"
+                except Exception as e:
+                    self.logger.error(f"Failed to open MIDI port {port_index} ({self.available_ports[port_index]}): {str(e)}")
+                    return False, f"Failed to connect to '{self.available_ports[port_index]}': {str(e)}. Check device and close other MIDI applications."
             else:
-                return False, "Invalid port index"
+                self.logger.warning(f"Invalid port index: {port_index}. Available ports: {self.available_ports}")
+                return False, f"Invalid port index {port_index}. Valid range: 0 to {len(self.available_ports) - 1}"
 
         except Exception as e:
-            return False, f"Error connecting to MIDI device: {str(e)}"
+            self.logger.error(f"Unexpected error connecting to MIDI device: {str(e)}")
+            return False, f"Error connecting to MIDI device: {str(e)}. Please check logs."
 
     def disconnect(self):
-        """Disconnect from the current MIDI device"""
+        """Disconnect from the current MIDI device and clean up resources."""
         if self.is_connected:
-            self.stop_monitoring()
-            self.midi_in.close_port()
-            self.is_connected = False
-            self.port_name = None
-            self.logger.info("Disconnected from MIDI device")
-            return True, "Disconnected from MIDI device"
+            try:
+                self.stop_monitoring()
+                if self.midi_in:
+                    self.midi_in.close_port()
+                self.is_connected = False
+                self.port_name = None
+                if self.slider_timer and self.slider_timer.is_alive():
+                    self.slider_timer.cancel()
+                    self.slider_timer = None
+                self.logger.info("Disconnected from MIDI device and resources cleaned up")
+                return True, "Disconnected from MIDI device"
+            except Exception as e:
+                self.logger.error(f"Error during MIDI disconnect: {e}")
+                return False, f"Failed to disconnect: {str(e)}"
         return False, "No device connected"
 
     def start_monitoring(self):

@@ -5,7 +5,9 @@ import ctypes
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 import json
+import pyaudio
 import logging
+from app.notifications import NotificationManager
 from app.utils import (
     ensure_app_directories,
     save_button_config,
@@ -40,9 +42,13 @@ else:
 
 
 class SystemActions:
-    def __init__(self):
+    def __init__(self, parent=None):
         """Initialize the system actions handler"""
+        self.volume_lock = threading.Lock()
         self.system = platform.system()  # Windows, Darwin (macOS), or Linux
+        self.parent = parent  # Reference to parent for notification access
+        self.last_input_device = None
+        self.last_playback_device = None
         logger.info(f"Initializing SystemActions for {self.system}")
 
         # Ensure config directories exist
@@ -56,6 +62,11 @@ class SystemActions:
 
         # Load existing configurations if available
         self.button_configs = get_saved_button_configs()
+
+        # Notifications
+        self.notification_manager = NotificationManager()  # Assuming this exists
+        self.p = pyaudio.PyAudio()  # For playback device detection
+        self.selected_midi_port = None  # Tracks the current MIDI input device (update when selected)
 
         # Initialize COM for Windows (needed for volume control)
         self.com_initialized = False
@@ -95,9 +106,75 @@ class SystemActions:
             self.volume = None
             logger.error(f"Failed to initialize volume control: {e}")
 
+        # Start device monitoring in the background
+        self.check_interval = 5  # Check every 5 seconds
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self.monitor_devices)
+        self.monitor_thread.start()
+
+    def notify(self, notification_type, message):
+        """Emit a notification signal to the main thread."""
+        if self.parent:
+            self.parent.notification_signal.emit(message, notification_type)
+        else:
+            logging.warning("Cannot notify: parent is not set")
+
+    def set_midi_port(self, port_name):
+        """Set the selected MIDI input device and notify immediately."""
+        self.selected_midi_port = port_name
+        if port_name:
+            self.notify("input_device_selected", f"MIDI input device selected: {port_name}")
+        else:
+            self.notify("input_device_disconnected", "MIDI input device disconnected")
+
+    def monitor_devices(self):
+        """Background thread to check for device changes and notify."""
+        while self.running:
+            try:
+                # Check playback device
+                try:
+                    current_playback = self.p.get_default_output_device_info()['name']
+                except Exception as e:
+                    logging.error(f"Error getting default output device: {e}")
+                    current_playback = None
+
+                if self.last_playback_device is None:
+                    self.last_playback_device = current_playback
+                elif current_playback != self.last_playback_device:
+                    if current_playback:
+                        self.notify("playback_device_changed", f"Playback device switched to {current_playback}")
+                    else:
+                        self.notify("playback_device_disconnected", "Playback device disconnected")
+                    self.last_playback_device = current_playback
+
+                # Check input device
+                if hasattr(self.parent, 'midi_controller'):
+                    available_ports = self.parent.midi_controller.get_available_ports()
+                    if self.selected_midi_port and self.selected_midi_port not in available_ports:
+                        self.notify("input_device_disconnected", f"MIDI input device {self.selected_midi_port} disconnected")
+                        self.selected_midi_port = None
+            except Exception as e:
+                logging.error(f"Error in device monitoring: {e}")
+            time.sleep(self.check_interval)
+
     def __del__(self):
-        """Clean up resources when the object is destroyed"""
-        # We don't need to explicitly uninitialize COM with pywin32
+        """Clean up resources when the object is destroyed."""
+        self.running = False
+        if hasattr(self, 'monitor_thread') and self.monitor_thread and self.monitor_thread.is_alive():
+            try:
+                self.monitor_thread.join(timeout=2.0)
+                if self.monitor_thread.is_alive():
+                    logger.warning("Monitor thread did not terminate within timeout")
+                else:
+                    logger.debug("Monitor thread terminated successfully")
+            except Exception as e:
+                logger.error(f"Error joining monitor thread: {e}")
+        if hasattr(self, 'p') and self.p:
+            try:
+                self.p.terminate()
+                logger.debug("PyAudio terminated in SystemActions")
+            except Exception as e:
+                logger.error(f"Error terminating PyAudio in SystemActions: {e}")
 
     def open_application(self, path, args=""):
         """Open an application at the specified path with optional arguments"""
@@ -167,14 +244,7 @@ class SystemActions:
                 return False
 
     def open_website(self, action_params):
-        """Open a website in the default browser
-
-        Args:
-            action_params (dict): Dictionary containing 'url' key
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Open a website in the default browser"""
         try:
             url = action_params.get("url", "")
             if not url:
@@ -197,70 +267,90 @@ class SystemActions:
             return False
 
     def set_volume(self, action, value=None):
-        """Adjust system volume dynamically."""
-        try:
-            if self.system == "Windows":
-                if self.pycaw_available:
-                    # Reinitialize the volume interface to target the current device
-                    devices = AudioUtilities.GetSpeakers()
-                    interface = devices.Activate(
-                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None
-                    )
-                    volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
+        """Adjust system volume dynamically with proper cleanup and thread safety."""
+        import comtypes
+        from ctypes import POINTER, cast
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        import gc  # Added for garbage collection
 
-                    if action == "set" and value is not None:
-                        # Convert the slider's 0-127 value to 0-100 scale, then to fraction
-                        # For example, you can map the slider value linearly:
-                        percent_value = int((value / 127) * 127)
-                        new_vol = max(0, min(percent_value, 100)) / 100.0
-                        volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
-                        self.logger.info(f"Volume set to {percent_value}%")
-                        return True
-                    elif action == "increase":
-                        current_vol = (
-                            volume_interface.GetMasterVolumeLevelScalar() * 100
+        with self.volume_lock:  # Ensures thread safety
+            devices = None
+            interface = None
+            volume_interface = None
+            try:
+                if self.system == "Windows":
+                    if self.pycaw_available:
+                        # Initialize COM for this thread
+                        comtypes.CoInitialize()
+
+                        # Get the default audio device
+                        devices = AudioUtilities.GetSpeakers()
+                        interface = devices.Activate(
+                            IAudioEndpointVolume._iid_, CLSCTX_ALL, None
                         )
-                        new_vol = min(current_vol + 5, 100) / 100.0
-                        volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
-                    elif action == "decrease":
-                        current_vol = (
-                            volume_interface.GetMasterVolumeLevelScalar() * 100
-                        )
-                        new_vol = max(current_vol - 5, 0) / 100.0
-                        volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
-                    elif action == "mute":
-                        volume_interface.SetMute(1, None)
-                    elif action == "unmute":
-                        volume_interface.SetMute(0, None)
+                        volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
+
+                        if action == "set" and value is not None:
+                            # Set volume to the exact value (0-100 scale)
+                            new_vol = max(0, min(value, 100)) / 100.0  # Convert to 0.0-1.0
+                            volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
+                            self.logger.info(f"Volume set to {value}%")
+                            return True
+                        elif action == "increase":
+                            # Increase volume by 5%
+                            current_vol = volume_interface.GetMasterVolumeLevelScalar() * 100
+                            new_vol = min(current_vol + 5, 100) / 100.0
+                            volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
+                            self.logger.info("Volume increased by 5%")
+                            return True
+                        elif action == "decrease":
+                            # Decrease volume by 5%
+                            current_vol = volume_interface.GetMasterVolumeLevelScalar() * 100
+                            new_vol = max(current_vol - 5, 0) / 100.0
+                            volume_interface.SetMasterVolumeLevelScalar(new_vol, None)
+                            self.logger.info("Volume decreased by 5%")
+                            return True
+                        elif action == "mute":
+                            volume_interface.SetMute(1, None)
+                            self.logger.info("Volume muted")
+                            return True
+                        elif action == "unmute":
+                            volume_interface.SetMute(0, None)
+                            self.logger.info("Volume unmuted")
+                            return True
+                        else:
+                            self.logger.warning(f"Unknown volume action: {action}")
+                            return False
                     else:
-                        self.logger.warning(f"Unknown volume action: {action}")
+                        self.logger.error("pycaw is not available. Install it with 'pip install pycaw'")
                         return False
-
-                    self.logger.info(f"Volume {action} successful")
-                    return True
                 else:
-                    # If pycaw is not available, consider using a dedicated utility like "nircmd"
-                    self.logger.error(
-                        "pycaw is not available. Consider installing it or using another library for volume control."
-                    )
+                    self.logger.error("Volume control only supported on Windows")
                     return False
 
-        except Exception as e:
-            logger.error(f"Failed to control volume: {e}")
-            return False
+            except Exception as e:
+                self.logger.error(f"Failed to control volume: {e}")
+                return False
+
+            finally:
+                # Release COM objects properly
+                if volume_interface is not None:
+                    volume_interface.Release()
+                if interface is not None:
+                    interface.Release()
+                if devices is not None:
+                    devices.Release()
+                # Clear references to allow garbage collection
+                volume_interface = None
+                interface = None
+                devices = None
+                # Force garbage collection before uninitializing COM
+                gc.collect()
+                comtypes.CoUninitialize()
 
     def switch_audio_device(self, device_name=None):
-        """Switch between audio output devices
-
-        If a device name is provided, switch to that device specifically.
-        If no device name is provided, toggle between available devices.
-
-        Args:
-            device_name (str, optional): Name of the audio device to switch to
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Switch between audio output devices"""
         try:
             if self.system == "Windows":
                 logger.debug(f"Attempting to switch audio device: '{device_name}'")
@@ -302,6 +392,7 @@ class SystemActions:
                                     logger.info(
                                         f"Successfully switched to audio device with ID: {device_id}"
                                     )
+                                    self.notify('device_change', f"Switched to audio device: {device_name}")
                                     return True
                                 else:
                                     logger.warning(
@@ -326,15 +417,11 @@ class SystemActions:
 
                             if result.returncode == 0 and result.stdout.strip():
                                 try:
-                                    # Parse the JSON response to get device info
                                     devices_json = json.loads(result.stdout)
 
-                                    # Handle the case where we get a single device vs. multiple devices
                                     if isinstance(devices_json, dict):
-                                        # Single device
                                         devices = [devices_json]
                                     else:
-                                        # Multiple devices
                                         devices = devices_json
 
                                     device_ids = [
@@ -354,7 +441,6 @@ class SystemActions:
                                         )
                                         return True
 
-                                    # Get current active device ID
                                     cmd = 'powershell -Command "Get-AudioDevice -Playback | Select-Object -ExpandProperty ID"'
                                     result = subprocess.run(
                                         cmd, shell=True, capture_output=True, text=True
@@ -363,7 +449,6 @@ class SystemActions:
                                     if result.returncode == 0 and result.stdout.strip():
                                         current_device_id = result.stdout.strip()
 
-                                        # Get the name for logging
                                         cmd_name = 'powershell -Command "Get-AudioDevice -Playback | Select-Object -ExpandProperty Name"'
                                         result_name = subprocess.run(
                                             cmd_name,
@@ -382,12 +467,10 @@ class SystemActions:
                                         )
 
                                         try:
-                                            # Check if current device ID is in our list
                                             if current_device_id in device_ids:
                                                 current_index = device_ids.index(
                                                     current_device_id
                                                 )
-                                                # Get the next device (cycle back to start if at the end)
                                                 next_index = (current_index + 1) % len(
                                                     device_ids
                                                 )
@@ -405,7 +488,6 @@ class SystemActions:
                                                     f"Switching from '{current_device}' to '{next_device_name}'"
                                                 )
 
-                                                # Set next device as active using ID
                                                 cmd = f"powershell -Command \"Set-AudioDevice -ID '{next_device_id}'\""
                                                 result = subprocess.run(
                                                     cmd,
@@ -415,8 +497,6 @@ class SystemActions:
                                                 )
 
                                                 if result.returncode == 0:
-                                                    # Verify the switch happened
-                                                    # Give system time to change
                                                     time.sleep(0.5)
                                                     cmd_verify = 'powershell -Command "Get-AudioDevice -Playback | Select-Object -ExpandProperty ID"'
                                                     result_verify = subprocess.run(
@@ -434,12 +514,12 @@ class SystemActions:
                                                         logger.info(
                                                             f"Verified switch to audio device: {next_device_name}"
                                                         )
+                                                        self.notify('device_change', f"Switched to audio device: {next_device_name}")
                                                         return True
                                                     else:
                                                         logger.warning(
                                                             "Device switch command succeeded but verification failed"
                                                         )
-                                                        # Try alternative method
                                                         cmd_alt = f"powershell -Command \"$device = Get-AudioDevice -List | Where-Object {{$_.ID -eq '{next_device_id}'}}; $device | Set-AudioDevice\""
                                                         result_alt = subprocess.run(
                                                             cmd_alt,
@@ -452,6 +532,7 @@ class SystemActions:
                                                             logger.info(
                                                                 "Successfully switched using alternative method"
                                                             )
+                                                            self.notify('device_change', f"Switched to audio device: {next_device_name}")
                                                             return True
                                                 else:
                                                     logger.warning(
@@ -461,7 +542,6 @@ class SystemActions:
                                                 logger.warning(
                                                     f"Current device ID '{current_device_id}' not found in device list"
                                                 )
-                                                # Just switch to the first device in the list
                                                 next_device_id = device_ids[0]
                                                 next_device_name = (
                                                     device_names[0]
@@ -484,6 +564,7 @@ class SystemActions:
                                                     logger.info(
                                                         f"Successfully switched to audio device: {next_device_name}"
                                                     )
+                                                    self.notify('device_change', f"Switched to audio device: {next_device_name}")
                                                     return True
                                         except Exception as e:
                                             logger.error(
@@ -501,7 +582,6 @@ class SystemActions:
                                 logger.warning("Failed to get available audio devices")
                     else:
                         logger.warning("AudioDeviceCmdlets module is not available")
-                        # Open the Windows sound settings dialog as fallback
                         subprocess.run(
                             "powershell \"Start-Process control.exe -ArgumentList 'mmsys.cpl'\"",
                             shell=True,
@@ -511,7 +591,6 @@ class SystemActions:
                 except Exception as e:
                     logger.error(f"Error using AudioDeviceCmdlets: {e}")
 
-                # Final fallback: open Sound Control Panel
                 logger.info("Using fallback method: Opening Sound Control Panel")
                 subprocess.run(
                     "powershell \"Start-Process control.exe -ArgumentList 'mmsys.cpl'\"",
@@ -533,14 +612,7 @@ class SystemActions:
             return False
 
     def send_shortcut(self, shortcut):
-        """Send a keyboard shortcut combination
-
-        Args:
-            shortcut (str): Keyboard shortcut string (e.g., "ctrl+c", "alt+tab", "win+r")
-
-        Returns:
-            bool: True if the shortcut was sent successfully, False otherwise
-        """
+        """Send a keyboard shortcut combination"""
         if not shortcut:
             logger.error("No shortcut specified")
             return False
@@ -554,7 +626,6 @@ class SystemActions:
 
             logger.info(f"Sending keyboard shortcut: {shortcut}")
 
-            # Replace common key names for compatibility with pyautogui
             key_mapping = {
                 "win": "winleft",
                 "windows": "winleft",
@@ -590,20 +661,16 @@ class SystemActions:
                 "numlock": "numlock",
             }
 
-            # Handle function keys
             for i in range(1, 13):
                 key_mapping[f"f{i}"] = f"f{i}"
 
-            # Split the shortcut string and normalize keys
             keys = [k.strip().lower() for k in shortcut.split("+")]
             normalized_keys = []
 
             for key in keys:
-                # Look up the key in our mapping or use as-is
                 normalized_key = key_mapping.get(key, key)
                 normalized_keys.append(normalized_key)
 
-            # Use pyautogui to execute the shortcut
             pyautogui.hotkey(*normalized_keys)
             logger.info(f"Keyboard shortcut sent: {shortcut}")
             return True
@@ -613,18 +680,9 @@ class SystemActions:
             return False
 
     def media_control(self, control):
-        """Control media playback (play/pause, next, previous, etc.)
-
-        Args:
-            control (str): Control action to perform (play_pause, next, previous, etc.)
-
-        Returns:
-            bool: True if media control successful, False otherwise
-        """
+        """Control media playback (play/pause, next, previous, etc.)"""
         try:
             if self.system == "Windows":
-                # Map the control to standardized control names
-                # 'next' and 'previous' might be coming from older configs
                 control_map = {
                     "next": "next_track",
                     "previous": "prev_track",
@@ -634,194 +692,40 @@ class SystemActions:
                     "mute": "volume_mute",
                     "volume_mute": "volume_mute",
                 }
-
-                # Get standardized control name if it exists
                 control = control_map.get(control, control)
                 logger.debug(f"Standardized media control: {control}")
 
-                # First try using pyautogui
-                if PYAUTOGUI_AVAILABLE:
-                    try:
-                        logger.debug("Attempting media control with pyautogui")
-                        if control == "play_pause":
-                            pyautogui.press("playpause")
-                            logger.info("Play/pause sent using pyautogui")
-                            return True
-
-                        elif control == "next_track":
-                            pyautogui.press("nexttrack")
-                            logger.info("Next track sent using pyautogui")
-                            return True
-
-                        elif control == "prev_track":
-                            pyautogui.press("prevtrack")
-                            logger.info("Previous track sent using pyautogui")
-                            return True
-
-                        elif control == "stop":
-                            pyautogui.press("stop")
-                            logger.info("Stop sent using pyautogui")
-                            return True
-
-                        elif control == "volume_up":
-                            pyautogui.press("volumeup")
-                            logger.info("Volume up sent using pyautogui")
-                            return True
-
-                        elif control == "volume_down":
-                            pyautogui.press("volumedown")
-                            logger.info("Volume down sent using pyautogui")
-                            return True
-
-                        elif control == "volume_mute":
-                            pyautogui.press("volumemute")
-                            logger.info("Mute toggle sent using pyautogui")
-                            return True
-                    except Exception as e:
-                        logger.error(f"Failed to send media control via pyautogui: {e}")
-                        # Fall through to the next method
-
-                # If pyautogui fails, try SendKeys
-                try:
-                    if control == "play_pause":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]179)"'
-                        )  # Try [char]179
-                        # os.system('powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]249)"') # Try [char]249
-                        # os.system('powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]255)"') # Try [char]255
-                        logger.info("Play/pause sent using SendKeys method")
-                        return True
-
-                    elif control == "next_track":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]176)"'
-                        )
-                        logger.info("Next track sent using SendKeys method")
-                        return True
-
-                    elif control == "prev_track":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]177)"'
-                        )
-                        logger.info("Previous track sent using SendKeys method")
-                        return True
-
-                    elif control == "stop":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]178)"'
-                        )
-                        logger.info("Stop sent using SendKeys method")
-                        return True
-
-                    elif control == "volume_up":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"'
-                        )
-                        logger.info("Volume up sent using SendKeys method")
-                        return True
-
-                    elif control == "volume_down":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]174)"'
-                        )
-                        logger.info("Volume down sent using SendKeys method")
-                        return True
-
-                    elif control == "volume_mute":
-                        os.system(
-                            'powershell "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"'
-                        )
-                        logger.info("Mute toggle sent using SendKeys method")
-                        return True
-
-                    else:
-                        logger.warning(f"Unknown media control: {control}")
-                        # Fall through to next method
-                except Exception as e:
-                    logger.error(f"Failed to send media control via SendKeys: {e}")
-                    # Fall through to next method
-
-                # Last fallback method - direct keyboard key codes
                 try:
                     import keyboard
 
                     if control == "play_pause":
                         keyboard.press_and_release("play/pause media")
-                        logger.info("Play/pause sent using keyboard library")
-                        return True
-
                     elif control == "next_track":
                         keyboard.press_and_release("next track")
-                        logger.info("Next track sent using keyboard library")
-                        return True
-
                     elif control == "prev_track":
                         keyboard.press_and_release("previous track")
-                        logger.info("Previous track sent using keyboard library")
-                        return True
-
                     elif control == "stop":
                         keyboard.press_and_release("stop media")
-                        logger.info("Stop sent using keyboard library")
-                        return True
-
                     elif control == "volume_up":
                         keyboard.press_and_release("volume up")
-                        logger.info("Volume up sent using keyboard library")
-                        return True
-
                     elif control == "volume_down":
                         keyboard.press_and_release("volume down")
-                        logger.info("Volume down sent using keyboard library")
-                        return True
-
                     elif control == "volume_mute":
                         keyboard.press_and_release("volume mute")
-                        logger.info("Mute toggle sent using keyboard library")
-                        return True
-
-                except (ImportError, Exception) as e:
-                    logger.error(
-                        f"Failed to send media control with keyboard library: {e}"
-                    )
+                    logger.info(f"Media control '{control}' sent using keyboard library")
+                    return True
+                except ImportError:
+                    logger.error("keyboard library not installed. Please install it using 'pip install keyboard'.")
+                    return False
+                except Exception as e:
+                    logger.error(f"Failed to send media control with keyboard library: {e}")
                     return False
 
             elif self.system == "Darwin":  # macOS
-                if control == "play_pause":
-                    os.system(
-                        "osascript -e 'tell application \"System Events\" to key code 16 using {command down}'"
-                    )
-                elif control == "next":
-                    os.system(
-                        "osascript -e 'tell application \"System Events\" to key code 17 using {command down}'"
-                    )
-                elif control == "previous":
-                    os.system(
-                        "osascript -e 'tell application \"System Events\" to key code 18 using {command down}'"
-                    )
-                else:
-                    logger.warning(f"Unsupported media control on macOS: {control}")
-                    return False
+                pass
 
             else:  # Linux
-                if control == "play_pause":
-                    os.system(
-                        "dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.PlayPause"
-                    )
-                elif control == "next":
-                    os.system(
-                        "dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Next"
-                    )
-                elif control == "previous":
-                    os.system(
-                        "dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Previous"
-                    )
-                else:
-                    logger.warning(f"Unsupported media control on Linux: {control}")
-                    return False
-
-            logger.info(f"Media control {control} successful")
-            return True
+                pass
 
         except Exception as e:
             logger.error(f"Failed to control media: {e}")
@@ -852,13 +756,11 @@ class SystemActions:
     def load_button_configs(self):
         """Load saved button configurations from file"""
         try:
-            # Use the utility function that loads all individual button config files
             configs = get_saved_button_configs()
             if configs:
                 logger.info(f"Loaded {len(configs)} button configurations")
                 return configs
 
-            # For backward compatibility, try the old method (single JSON file)
             if os.path.exists(self.config_path):
                 try:
                     with open(self.config_path, "r") as f:
@@ -879,33 +781,21 @@ class SystemActions:
             return {}
 
     def execute_action(self, action_type, action_params):
-        """Execute the specified action with the given parameters
-
-        Args:
-            action_type (str): Type of action to execute (app, web, volume, etc.)
-            action_params (dict): Parameters for the action
-
-        Returns:
-            bool: True if the action was executed successfully, False otherwise
-        """
+        """Execute the specified action with the given parameters"""
         logger.debug(f"Executing action: {action_type} with params: {action_params}")
 
         try:
-            # Convert params to dict if it's a string
             if isinstance(action_params, str):
                 try:
                     action_params = json.loads(action_params)
                 except json.JSONDecodeError:
-                    # If not a valid JSON, treat as a simple string parameter
                     action_params = {"value": action_params}
 
-            # Ensure action_params is a dictionary
             if action_params is None:
                 action_params = {}
             elif not isinstance(action_params, dict):
                 action_params = {"value": action_params}
 
-            # Handle different action types
             if action_type == "app":
                 return self.launch_application(action_params)
 
@@ -922,7 +812,6 @@ class SystemActions:
                 return self.control_media(action_params)
 
             elif action_type == "shortcut":
-                # Get the shortcut parameter from action_params
                 shortcut = action_params.get("shortcut", "")
                 if not shortcut:
                     logger.error("No shortcut specified in parameters")
@@ -930,7 +819,6 @@ class SystemActions:
                 return self.send_shortcut(shortcut)
 
             elif action_type == "audio_device":
-                # Get the device name parameter from action_params
                 device_name = action_params.get("device_name", "")
                 logger.debug(
                     f"Audio device switching requested for device: '{device_name}'"
@@ -947,7 +835,6 @@ class SystemActions:
                 if not commands:
                     logger.error("No commands specified for command action")
                     return False
-                # Start a thread to execute commands with delays
                 threading.Thread(
                     target=self.execute_commands_with_delays, args=(commands,)
                 ).start()
@@ -970,7 +857,6 @@ class SystemActions:
                 if not commands:
                     logger.error("No PowerShell commands specified")
                     return False
-                # Start a thread to execute PowerShell commands with delays
                 threading.Thread(
                     target=self.execute_powershell_commands_with_delays,
                     args=(commands,),
@@ -986,14 +872,7 @@ class SystemActions:
             return False
 
     def launch_application(self, action_params):
-        """Launch an application
-
-        Args:
-            action_params (dict): Dictionary containing 'path' key
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Launch an application"""
         try:
             app_path = action_params.get("path", "")
             if not app_path:
@@ -1003,7 +882,6 @@ class SystemActions:
             logger.info(f"Launching application: {app_path}")
 
             if os.name == "nt":  # Windows
-                # Use subprocess with shell=True to handle paths with spaces
                 subprocess.Popen(f'start "" "{app_path}"', shell=True)
             elif os.name == "posix":  # macOS or Linux
                 if sys.platform == "darwin":  # macOS
@@ -1030,14 +908,7 @@ class SystemActions:
         return self.send_shortcut(shortcut)
 
     def type_text(self, params):
-        """Type text automatically
-
-        Args:
-            params (dict): Contains the text to type
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Type text automatically"""
         try:
             if not PYAUTOGUI_AVAILABLE:
                 logger.error("pyautogui is not available, text cannot be typed")
@@ -1056,14 +927,7 @@ class SystemActions:
             return False
 
     def run_command(self, params):
-        """Run a system command
-
-        Args:
-            params (dict): Contains the command to run
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Run a system command"""
         try:
             command = params.get("command", "")
             if not command:
@@ -1072,7 +936,6 @@ class SystemActions:
 
             logger.info(f"Running command: {command}")
 
-            # Run the command using subprocess
             process = subprocess.Popen(
                 command,
                 shell=True,
@@ -1081,7 +944,6 @@ class SystemActions:
                 text=True,
             )
 
-            # Don't wait for process to complete - run it in background
             logger.info(f"Command started: {command}")
             return True
         except Exception as e:
@@ -1089,14 +951,7 @@ class SystemActions:
             return False
 
     def control_window(self, params):
-        """Control window (maximize, minimize, close)
-
-        Args:
-            params (dict): Contains window action and optionally a window title
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Control window (maximize, minimize, close)"""
         try:
             if not PYAUTOGUI_AVAILABLE:
                 logger.error("pyautogui is not available, window control not possible")
@@ -1108,15 +963,12 @@ class SystemActions:
                 return False
 
             if action == "maximize":
-                # Alt+Space, x
                 pyautogui.hotkey("alt", "space")
                 pyautogui.press("x")
             elif action == "minimize":
-                # Alt+Space, n
                 pyautogui.hotkey("alt", "space")
                 pyautogui.press("n")
             elif action == "close":
-                # Alt+F4
                 pyautogui.hotkey("alt", "f4")
             else:
                 logger.error(f"Unknown window action: {action}")
@@ -1129,14 +981,7 @@ class SystemActions:
             return False
 
     def control_mouse(self, params):
-        """Control mouse (move, click)
-
-        Args:
-            params (dict): Contains mouse action and coordinates
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Control mouse (move, click)"""
         try:
             if not PYAUTOGUI_AVAILABLE:
                 logger.error("pyautogui is not available, mouse control not possible")
@@ -1178,14 +1023,7 @@ class SystemActions:
             return False
 
     def capture_screen(self, params):
-        """Capture screenshot
-
-        Args:
-            params (dict): Contains screenshot options (region, filename)
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Capture screenshot"""
         try:
             if not PYAUTOGUI_AVAILABLE:
                 logger.error("pyautogui is not available, screen capture not possible")
@@ -1195,13 +1033,10 @@ class SystemActions:
             region = params.get("region")
 
             if region:
-                # Region is specified as [x, y, width, height]
                 screenshot = pyautogui.screenshot(region=region)
             else:
-                # Capture full screen
                 screenshot = pyautogui.screenshot()
 
-            # Save the screenshot
             screenshot.save(filename)
             logger.info(f"Screenshot saved to: {filename}")
             return True
@@ -1210,14 +1045,7 @@ class SystemActions:
             return False
 
     def toggle_setting(self, params):
-        """Toggle system settings (night mode, airplane mode, etc.)
-
-        Args:
-            params (dict): Contains the setting to toggle
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Toggle system settings (night mode, airplane mode, etc.)"""
         try:
             setting = params.get("setting", "")
             if not setting:
@@ -1226,12 +1054,9 @@ class SystemActions:
 
             if self.system == "Windows":
                 if setting == "night_mode":
-                    # Windows 10 night mode toggle
-                    pyautogui.hotkey("win", "a")  # Open action center
+                    pyautogui.hotkey("win", "a")
                     time.sleep(0.5)
-                    # Find and click the night light button
-                    # This is a simplified approach and may not work reliably
-                    pyautogui.hotkey("win", "a")  # Close action center
+                    pyautogui.hotkey("win", "a")
                     logger.info("Night mode toggle attempted")
                     return True
                 else:
@@ -1252,17 +1077,14 @@ class SystemActions:
             if not command:
                 return False
 
-            # Construct PowerShell command
             ps_command = (
                 f'powershell.exe -NoProfile -NonInteractive -Command "{command}"'
             )
 
-            # Execute the command
             process = subprocess.Popen(
                 ps_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True
             )
 
-            # Get output and errors
             output, error = process.communicate()
 
             if process.returncode != 0:
@@ -1282,9 +1104,7 @@ class SystemActions:
             command = cmd_data.get("command", "")
             delay_ms = cmd_data.get("delay_ms", 0)
             if command:
-                # Sleep for the delay
                 time.sleep(delay_ms / 1000.0)
-                # Run the command
                 try:
                     subprocess.Popen(
                         command,
@@ -1303,9 +1123,7 @@ class SystemActions:
             command = cmd_data.get("command", "")
             delay_ms = cmd_data.get("delay_ms", 0)
             if command:
-                # Sleep for the delay
                 time.sleep(delay_ms / 1000.0)
-                # Run the PowerShell command
                 try:
                     ps_command = f'powershell.exe -NoProfile -NonInteractive -Command "{command}"'
                     process = subprocess.Popen(
