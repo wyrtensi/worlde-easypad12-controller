@@ -1,11 +1,8 @@
 # WORLDE EASYPAD.12 Controller
 Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.12
-![image](https://github.com/user-attachments/assets/33a97c40-b027-4253-a1e9-359099e9e419)
-![image](https://github.com/user-attachments/assets/bb10aef9-92c9-4c5d-8c79-a3507651e0c2) ![image](https://github.com/user-attachments/assets/701b1546-3cd2-4e04-8905-1e927397f8c1) ![image](https://github.com/user-attachments/assets/c9760323-2a7b-46d1-8781-90414f1e7e21)
-
-
-
-
+![image](https://github.com/user-attachments/assets/3454a86c-b0e0-4f52-baf0-794052dd0bd3)
+![image](https://github.com/user-attachments/assets/24138dd0-618b-4a1f-97a9-8a96769f4627)
+![image](https://github.com/user-attachments/assets/40d540d1-9d37-4b1a-877f-3f4d275ecd7e)
 
 ## Features
 
@@ -21,6 +18,7 @@ Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.1
   - Run system commands
   - Media controls (play/pause, next/previous track, volume)
   - Speech to text (English/Russian)
+- Customizable notifications
 - Beautiful dark-themed UI with teal and pink accents
 - Save and load your button configurations
 - Minimize to system tray for background operation
