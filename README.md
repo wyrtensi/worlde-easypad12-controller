@@ -1,5 +1,5 @@
 # WORLDE EASYPAD.12 Controller
-Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.12
+Adds multifunctional controls in Windows 10/11 to your favorite WORLDE EASYPAD.12
 ![image](https://github.com/user-attachments/assets/3454a86c-b0e0-4f52-baf0-794052dd0bd3)
 ![image](https://github.com/user-attachments/assets/24138dd0-618b-4a1f-97a9-8a96769f4627)
 ![image](https://github.com/user-attachments/assets/40d540d1-9d37-4b1a-877f-3f4d275ecd7e)
@@ -28,7 +28,7 @@ Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.1
 ## Prerequisites
 
 - WORLDE EASYPAD.12 MIDI keyboard
-- Windows 10/11 operating system
+- Windows 10/11 operating system (Tested on windows 11)
 
 ## EXE Building info
 - Python 3.12 installed
