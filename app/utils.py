@@ -203,22 +203,6 @@ def get_action_types():
             "name": "Type Text",
             "description": "Type text automatically when the button is pressed."
         },
-        "window": {
-            "name": "Window Control",
-            "description": "Control windows (maximize, minimize, close)."
-        },
-        "mouse": {
-            "name": "Mouse Control",
-            "description": "Control mouse (move, click)."
-        },
-        "screen": {
-            "name": "Screen Capture",
-            "description": "Capture screenshots."
-        },
-        "setting": {
-            "name": "Toggle Setting",
-            "description": "Toggle system settings (night mode, airplane mode, etc.)."
-        },
         "speech_to_text": {
             "name": "Speech to Text",
             "description": "Recognize speech and type it as text while holding the button."

@@ -680,55 +680,50 @@ class SystemActions:
             return False
 
     def media_control(self, control):
-        """Control media playback (play/pause, next, previous, etc.)"""
+        """Control media playback using keyboard shortcuts"""
+        if not PYAUTOGUI_AVAILABLE:
+            logger.error("pyautogui not available for media control")
+            return False
+
+        control = standardize_media_control(control)
+        logger.debug(f"Standardized media control: {control}")
+        logger.info(f"Media control '{control}' sent using keyboard library")
+
         try:
-            if self.system == "Windows":
-                control_map = {
-                    "next": "next_track",
-                    "previous": "prev_track",
-                    "next_track": "next_track",
-                    "prev_track": "prev_track",
-                    "previous_track": "prev_track",
-                    "mute": "volume_mute",
-                    "volume_mute": "volume_mute",
-                }
-                control = control_map.get(control, control)
-                logger.debug(f"Standardized media control: {control}")
-
-                try:
-                    import keyboard
-
-                    if control == "play_pause":
-                        keyboard.press_and_release("play/pause media")
-                    elif control == "next_track":
-                        keyboard.press_and_release("next track")
-                    elif control == "prev_track":
-                        keyboard.press_and_release("previous track")
-                    elif control == "stop":
-                        keyboard.press_and_release("stop media")
-                    elif control == "volume_up":
-                        keyboard.press_and_release("volume up")
-                    elif control == "volume_down":
-                        keyboard.press_and_release("volume down")
-                    elif control == "volume_mute":
-                        keyboard.press_and_release("volume mute")
-                    logger.info(f"Media control '{control}' sent using keyboard library")
-                    return True
-                except ImportError:
-                    logger.error("keyboard library not installed. Please install it using 'pip install keyboard'.")
-                    return False
-                except Exception as e:
-                    logger.error(f"Failed to send media control with keyboard library: {e}")
-                    return False
-
-            elif self.system == "Darwin":  # macOS
-                pass
-
-            else:  # Linux
-                pass
-
+            if control == "play_pause":
+                pyautogui.press("playpause")
+                # Use notify method instead of direct notification_manager access
+                self.notify("play_pause_track", "Play/Pause")
+                return True
+            elif control == "next" or control == "next_track":
+                pyautogui.press("nexttrack")
+                self.notify("music_track", "Skipped to next track")
+                return True
+            elif control == "previous" or control == "previous_track":
+                pyautogui.press("prevtrack")
+                self.notify("music_track", "Returned to previous track")
+                return True
+            elif control == "stop":
+                pyautogui.press("stop")
+                self.notify("music_track", "Media playback stopped")
+                return True
+            elif control == "mute" or control == "volume_mute":
+                pyautogui.press("volumemute")
+                self.notify("volume_adjustment", "Volume muted")
+                return True
+            elif control == "volume_up":
+                pyautogui.press("volumeup")
+                self.notify("volume_adjustment", "Volume increased")
+                return True
+            elif control == "volume_down":
+                pyautogui.press("volumedown")
+                self.notify("volume_adjustment", "Volume decreased")
+                return True
+            else:
+                logger.warning(f"Unknown media control command: {control}")
+                return False
         except Exception as e:
-            logger.error(f"Failed to control media: {e}")
+            logger.error(f"Error sending media control: {e}")
             return False
 
     def save_button_config(
@@ -845,9 +840,6 @@ class SystemActions:
 
             elif action_type == "mouse":
                 return self.control_mouse(action_params)
-
-            elif action_type == "screen":
-                return self.capture_screen(action_params)
 
             elif action_type == "setting":
                 return self.toggle_setting(action_params)
@@ -1020,28 +1012,6 @@ class SystemActions:
             return True
         except Exception as e:
             logger.error(f"Failed to control mouse: {e}")
-            return False
-
-    def capture_screen(self, params):
-        """Capture screenshot"""
-        try:
-            if not PYAUTOGUI_AVAILABLE:
-                logger.error("pyautogui is not available, screen capture not possible")
-                return False
-
-            filename = params.get("filename", f"screenshot_{int(time.time())}.png")
-            region = params.get("region")
-
-            if region:
-                screenshot = pyautogui.screenshot(region=region)
-            else:
-                screenshot = pyautogui.screenshot()
-
-            screenshot.save(filename)
-            logger.info(f"Screenshot saved to: {filename}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to capture screen: {e}")
             return False
 
     def toggle_setting(self, params):
