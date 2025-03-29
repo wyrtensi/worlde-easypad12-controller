@@ -65,5 +65,3 @@ Then:
 6. Use the slider to control system volume.
 
 7. Minimize to tray by clicking the "Hide to Tray" button or closing the window.
-
->NOTE: if you have laggy slider after disabling it, simply relaunch the application
