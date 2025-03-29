@@ -17,7 +17,7 @@ Adds multifunctional controls for your Windows to your favorite WORLDE EASYPAD.1
   - Run powershell commands
   - Run system commands
   - Media controls (play/pause, next/previous track, volume)
-  - Speech to text (English/Russian)
+  - Speech to text (Google speech recognition, multilangual, hold button for it)
 - Customizable notifications
 - Beautiful dark-themed UI with teal and pink accents
 - Save and load your button configurations
