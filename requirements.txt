@@ -15,5 +15,6 @@ pyperclip
 keyboard
 winrt.windows.foundation
 winrt.windows.media.control
+winrt.windows.media
 PySide6
 qasync

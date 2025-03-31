@@ -218,7 +218,7 @@ class NotificationWindow(QWidget):
         self.label.setFont(font)
         
         # Apply text color if specified - use standalone styling without background
-        text_color = self.theme_settings.get('text_color')
+        text_color = self.theme_settings.get('text_color') or self.theme_settings.get('font_color')
         if text_color:
             self.label.setStyleSheet(f"color: {text_color}; background: transparent;")
         
@@ -318,7 +318,7 @@ class NotificationWindow(QWidget):
         self.label.setFont(font)
         
         # Apply text color if specified - force transparent background
-        text_color = self.theme_settings.get('text_color')
+        text_color = self.theme_settings.get('text_color') or self.theme_settings.get('font_color')
         if text_color:
             self.label.setStyleSheet(f"color: {text_color}; background: transparent;")
         
@@ -426,7 +426,7 @@ class NotificationWindow(QWidget):
             border_radius = "0px"
         
         # Get text color (ensure consistent use of text_color instead of font_color)
-        text_color = self.theme_settings.get('text_color', 'white' if self.theme == 'dark' else 'black')
+        text_color = self.theme_settings.get('text_color') or self.theme_settings.get('font_color', 'white' if self.theme == 'dark' else 'black')
         
         # Base style without background
         base_style = """
@@ -570,7 +570,8 @@ class NotificationManager:
             'theme_settings': {
                 'font_family': 'Segoe UI',
                 'font_weight': 'normal',
-                'font_color': '',  # Default based on theme
+                'text_color': '',  # New format using text_color
+                'font_color': '',  # Old format - kept for backward compatibility
                 'bg_color': '',    # Default based on theme
                 'use_gradient': False,
                 'gradient_start': '#333333',

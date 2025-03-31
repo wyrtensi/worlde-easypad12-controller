@@ -2931,32 +2931,19 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         font_size_layout.setContentsMargins(0, 0, 0, 0)
         
         self.font_size_combo = QtWidgets.QComboBox()
-        self.font_size_combo.addItems(["Small", "Medium", "Large", "Custom"])
+        self.font_size_combo.addItems(["Custom"])
         self.font_size_combo.setStyleSheet(COMBOBOX_STYLE)
         
-        # Get current font size and set the combo box
+        # Get current font size and set the SpinBox value
         font_size_value = self.notification_manager.settings.get("font_size", 12)
-        is_custom = True
         
-        if font_size_value == 8:
-            self.font_size_combo.setCurrentIndex(0)
-            is_custom = False
-        elif font_size_value == 12:
-            self.font_size_combo.setCurrentIndex(1)
-            is_custom = False
-        elif font_size_value == 16:
-            self.font_size_combo.setCurrentIndex(2)
-            is_custom = False
-        
-        self.font_size_combo.currentIndexChanged.connect(self.on_font_size_changed)
-        
-        # Custom font size input
+        # Custom font size input - always visible now
         self.custom_font_size = QtWidgets.QSpinBox()
         self.custom_font_size.setMinimum(6)
         self.custom_font_size.setMaximum(36)
         self.custom_font_size.setValue(font_size_value)
         self.custom_font_size.setStyleSheet(SPINBOX_STYLE)
-        self.custom_font_size.setVisible(is_custom)
+        self.custom_font_size.setVisible(True)
         
         font_size_layout.addWidget(self.font_size_combo, 1)
         font_size_layout.addWidget(self.custom_font_size)
@@ -3016,9 +3003,8 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         layout.addStretch()
     
     def on_font_size_changed(self, index):
-        """Show/hide custom font size input based on selection"""
-        is_custom = index == 3  # "Custom" is the fourth item
-        self.custom_font_size.setVisible(is_custom)
+        """No longer needed as custom font size is always visible"""
+        pass
     
     def setup_theme_tab(self):
         """Set up the theme tab with customization options"""
@@ -3181,8 +3167,8 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         text_color_layout.addWidget(self.text_color_button)
         text_color_layout.addWidget(self.text_color_value)
         
-        color_grid.addWidget(self.text_color_label, 4, 0)
-        color_grid.addWidget(text_color_frame, 4, 1)
+        color_grid.addWidget(self.text_color_label, 1, 0)
+        color_grid.addWidget(text_color_frame, 1, 1)
         
         # Background style
         bg_style_label = QtWidgets.QLabel("Background Style:")
@@ -3274,8 +3260,9 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         progress_color_layout.addWidget(self.progress_color_button)
         progress_color_layout.addWidget(self.progress_color_value)
         
-        color_grid.addWidget(self.progress_color_label, 4, 0)
-        color_grid.addWidget(progress_color_frame, 4, 1)
+        # Change grid position from 4,0/4,1 to 5,0/5,1 to avoid collision with text color
+        color_grid.addWidget(self.progress_color_label, 5, 0)
+        color_grid.addWidget(progress_color_frame, 5, 1)
         
         color_layout.addLayout(color_grid)
         content_layout.addWidget(color_card)
@@ -3438,6 +3425,12 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         self.bg_color_button.setEnabled(not is_transparent)
         self.bg_color_button.parentWidget().setVisible(not is_transparent)
         self.bg_color_value.setEnabled(not is_transparent)
+        
+        # Ensure text color controls are always visible
+        self.text_color_label.setVisible(True)
+        self.text_color_button.setEnabled(True)
+        self.text_color_button.parentWidget().setVisible(True)
+        self.text_color_value.setEnabled(True)
     
     def update_notification_state(self):
         """Enable or disable notification checkboxes based on main toggle"""
@@ -3551,16 +3544,8 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         for notification_type, checkbox in self.type_checkboxes.items():
             types[notification_type] = checkbox.isChecked()
         
-        # Font Size
-        font_size_idx = self.font_size_combo.currentIndex()
-        if font_size_idx == 0:
-            font_size = 10  # Small
-        elif font_size_idx == 1:
-            font_size = 12  # Medium
-        elif font_size_idx == 2:
-            font_size = 16  # Large
-        else:  # Custom
-            font_size = self.custom_font_size.value()
+        # Font Size - Always use custom size now
+        font_size = self.custom_font_size.value()
             
         # Position
         position_idx = self.position_combo.currentIndex()

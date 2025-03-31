@@ -699,7 +699,7 @@ class SystemActions:
                 pyautogui.press("nexttrack")
                 self.notify("music_track", "Skipped to next track")
                 return True
-            elif control == "previous" or control == "previous_track":
+            elif control == "previous" or control == "previous_track" or control == "prev_track":
                 pyautogui.press("prevtrack")
                 self.notify("music_track", "Returned to previous track")
                 return True
@@ -1190,7 +1190,7 @@ def send_media_control(control: str):
                 pyautogui.press("playpause")
             elif control == "next_track":
                 pyautogui.press("nexttrack")
-            elif control == "previous_track":
+            elif control == "previous_track" or control == "prev_track":
                 pyautogui.press("prevtrack")
             logger.info("Media control sent using pycaw/pyautogui")
         else:
@@ -1201,7 +1201,7 @@ def send_media_control(control: str):
             elif control == "next_track":
                 powershell_command = "$WshShell = New-Object -ComObject WScript.Shell; $WshShell.SendKeys([char]176)"  # '{NextTrack}'"
             # powershell_command = "$WshShell = New-Object -ComObject WScript.Shell; $WshShell.SendKeys('{MEDIA_NEXT_TRACK}')"
-            elif control == "previous_track":
+            elif control == "previous_track" or control == "prev_track":
                 powershell_command = "$WshShell = New-Object -ComObject WScript.Shell; $WshShell.SendKeys([char]177)"  # '{PrevTrack}'"
                 # powershell_command = "$WshShell = New-Object -ComObject WScript.Shell; $WshShell.SendKeys('{MEDIA_PREV_TRACK}')"
             else:
