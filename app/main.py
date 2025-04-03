@@ -18,10 +18,27 @@ import pyaudio
 import winrt.windows.foundation
 import winrt.windows.media.control as wmc
 from qasync import asyncSlot
+import openai
+from io import BytesIO
+import tempfile
+from pydub import AudioSegment
 from app.midi_controller import MIDIController
 from app.system_actions import SystemActions
 from app.notifications import NotificationManager, NotificationWindow
 from app.utils import setup_logging, get_dark_theme, load_midi_mapping, get_media_controls, load_button_config, get_action_types, save_button_config
+import wave
+import keyboard
+import subprocess
+import ctypes
+
+# Try to import win32clipboard for direct clipboard access
+try:
+    import win32clipboard
+    import win32con
+    from ctypes import Structure, c_ulong, c_ushort, POINTER, sizeof, byref
+    WIN32CLIPBOARD_AVAILABLE = True
+except ImportError:
+    WIN32CLIPBOARD_AVAILABLE = False
 
 # Set up logging
 logger = setup_logging()
@@ -1172,6 +1189,8 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
                         if config and config.get('action_type') == 'speech_to_text' and config.get('enabled', True):
                             language = config['action_data'].get('language', 'en-US')
                             self.start_speech_recognition(button_id, language)
+                        elif config and config.get('action_type') == 'ask_chatgpt' and config.get('enabled', True):
+                            self.start_chatgpt(button_id, config['action_data'])
                         else:
                             self.action_signal.emit(button_id, None)
                         if button_id in self.button_widgets:
@@ -1181,8 +1200,12 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
                 elif (128 <= status_byte <= 143) or (144 <= status_byte <= 159 and data2 == 0):
                     note = data1
                     button_id = note
-                    if str(button_id) in self.button_config and self.button_config[str(button_id)].get('action_type') == 'speech_to_text':
-                        self.stop_speech_recognition(button_id)
+                    if str(button_id) in self.button_config:
+                        action_type = self.button_config[str(button_id)].get('action_type')
+                        if action_type == 'speech_to_text':
+                            self.stop_speech_recognition(button_id)
+                        elif action_type == 'ask_chatgpt':
+                            self.stop_chatgpt(button_id)
                     if button_id in self.button_widgets:
                         self.button_style_signal.emit(button_id, False)
                 
@@ -1200,6 +1223,11 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
                                 self.start_speech_recognition(button_id, language)
                             else:
                                 self.stop_speech_recognition(button_id)
+                        elif config and config.get('action_type') == 'ask_chatgpt' and config.get('enabled', True):
+                            if value > 0:
+                                self.start_chatgpt(button_id, config['action_data'])
+                            else:
+                                self.stop_chatgpt(button_id)
                         else:
                             if value > 0:
                                 self.action_signal.emit(button_id, None)
@@ -1254,6 +1282,11 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
                                 self.start_speech_recognition(button_id, language)
                             else:
                                 self.stop_speech_recognition(button_id)
+                        elif config and config.get('action_type') == 'ask_chatgpt' and config.get('enabled', True):
+                            if value > 0:
+                                self.start_chatgpt(button_id, config['action_data'])
+                            else:
+                                self.stop_chatgpt(button_id)
                         else:
                             if value > 0:
                                 self.action_signal.emit(button_id, None)
@@ -1290,6 +1323,31 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
         self.message_signal.emit("Listening for speech...")
         logger.info("Emitting notification signal: Speech recognition started")
         self.notification_signal.emit("Speech recognition started", 'speech_to_text')
+        
+    def start_chatgpt(self, button_id, config):
+        if self.is_button_held:
+            # Stop any ongoing recording
+            if self.button_config.get(str(self.active_recognition_button), {}).get('action_type') == 'speech_to_text':
+                self.stop_speech_recognition(self.active_recognition_button)
+            elif self.button_config.get(str(self.active_recognition_button), {}).get('action_type') == 'ask_chatgpt':
+                self.stop_chatgpt(self.active_recognition_button)
+                
+        self.is_button_held = True
+        self.active_recognition_button = button_id
+        self.chatgpt_config = config
+        self.frames = []
+
+        def callback(in_data, frame_count, time_info, status):
+            if self.is_button_held:
+                self.frames.append(in_data)
+                return (in_data, pyaudio.paContinue)
+            return (in_data, pyaudio.paComplete)
+
+        self.stream = self.p.open(format=pyaudio.paInt16, channels=1, rate=44100, input=True, frames_per_buffer=1024, stream_callback=callback)
+        self.stream.start_stream()
+        self.message_signal.emit("ChatGPT is listening...")
+        logger.info("Emitting notification signal: ChatGPT is listening")
+        self.notification_signal.emit("ChatGPT is listening...", 'ask_chatgpt')
 
     def stop_speech_recognition(self, button_id):
         if self.active_recognition_button == button_id and self.is_button_held:
@@ -1304,6 +1362,21 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
             self.message_signal.emit("Speech recognition stopped")
             logger.info("Emitting notification signal: Speech recognition stopped")
             self.notification_signal.emit("Speech recognition stopped", 'speech_to_text')
+            
+    def stop_chatgpt(self, button_id):
+        if self.active_recognition_button == button_id and self.is_button_held:
+            self.is_button_held = False
+            self.stream.stop_stream()
+            self.stream.close()
+            audio_data = b''.join(self.frames)
+            config = self.chatgpt_config
+            if audio_data:
+                threading.Thread(target=self.ask_chatgpt, args=(audio_data, config)).start()
+            self.active_recognition_button = None
+            self.chatgpt_config = None
+            self.message_signal.emit("ChatGPT listening finished")
+            logger.info("Emitting notification signal: ChatGPT listening finished")
+            self.notification_signal.emit("ChatGPT listening finished", 'ask_chatgpt')
 
     def recognize_speech(self, audio_data, language):
         try:
@@ -1311,17 +1384,498 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
             recognizer = sr.Recognizer()
             text = recognizer.recognize_google(audio_segment, language=language)
             logging.info(f"Recognized text: {text}")
-            pyperclip.copy(text)
-            time.sleep(0.1)
-            pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.1)
-            pyautogui.press('space')
+            
+            # WINDOWS DIRECT CLIPBOARD API METHOD (most reliable on Windows)
+            if WIN32CLIPBOARD_AVAILABLE and platform.system() == "Windows":
+                try:
+                    logging.info("Using Win32 clipboard API for paste operation")
+                    
+                    # Save original clipboard content
+                    original_clipboard_data = None
+                    win32clipboard.OpenClipboard()
+                    if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                        original_clipboard_data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+                    win32clipboard.EmptyClipboard()
+                    
+                    # Set new clipboard content
+                    win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+                    win32clipboard.CloseClipboard()
+                    
+                    time.sleep(0.2)  # Give time for clipboard to register
+                    
+                    # Try to paste using SendInput for most reliable input
+                    try:
+                        # Define the input structure for VK_CONTROL and V key
+                        KEYEVENTF_KEYDOWN = 0x0000
+                        KEYEVENTF_KEYUP = 0x0002
+                        
+                        # Input type constants
+                        INPUT_KEYBOARD = 1
+                        
+                        class KeyboardInput(Structure):
+                            _fields_ = [
+                                ("wVk", c_ushort),
+                                ("wScan", c_ushort),
+                                ("dwFlags", c_ulong),
+                                ("time", c_ulong),
+                                ("dwExtraInfo", POINTER(c_ulong))
+                            ]
+                        
+                        class HardwareInput(Structure):
+                            _fields_ = [
+                                ("uMsg", c_ulong),
+                                ("wParamL", c_ushort),
+                                ("wParamH", c_ushort)
+                            ]
+                        
+                        class MouseInput(Structure):
+                            _fields_ = [
+                                ("dx", c_ulong),
+                                ("dy", c_ulong),
+                                ("mouseData", c_ulong),
+                                ("dwFlags", c_ulong),
+                                ("time", c_ulong),
+                                ("dwExtraInfo", POINTER(c_ulong))
+                            ]
+                        
+                        class InputUnion(ctypes.Union):
+                            _fields_ = [
+                                ("ki", KeyboardInput),
+                                ("mi", MouseInput),
+                                ("hi", HardwareInput)
+                            ]
+                        
+                        class Input(Structure):
+                            _fields_ = [
+                                ("type", c_ulong),
+                                ("ii", InputUnion)
+                            ]
+                        
+                        # Create input array for Ctrl+V sequence
+                        inputs = (Input * 4)()
+                        
+                        # VK_CONTROL down
+                        inputs[0].type = INPUT_KEYBOARD
+                        inputs[0].ii.ki.wVk = 0x11  # VK_CONTROL
+                        inputs[0].ii.ki.dwFlags = KEYEVENTF_KEYDOWN
+                        
+                        # V key down
+                        inputs[1].type = INPUT_KEYBOARD
+                        inputs[1].ii.ki.wVk = 0x56  # V key
+                        inputs[1].ii.ki.dwFlags = KEYEVENTF_KEYDOWN
+                        
+                        # V key up
+                        inputs[2].type = INPUT_KEYBOARD
+                        inputs[2].ii.ki.wVk = 0x56  # V key
+                        inputs[2].ii.ki.dwFlags = KEYEVENTF_KEYUP
+                        
+                        # VK_CONTROL up
+                        inputs[3].type = INPUT_KEYBOARD
+                        inputs[3].ii.ki.wVk = 0x11  # VK_CONTROL
+                        inputs[3].ii.ki.dwFlags = KEYEVENTF_KEYUP
+                        
+                        # Send input
+                        ctypes.windll.user32.SendInput(4, byref(inputs), sizeof(Input))
+                        time.sleep(0.3)
+                        logging.info("Pasted using direct SendInput Windows API")
+                        
+                        # Add a space after pasting
+                        time.sleep(0.1)
+                        pyautogui.press('space')
+                        
+                        # Restore original clipboard
+                        time.sleep(0.3)
+                        win32clipboard.OpenClipboard()
+                        win32clipboard.EmptyClipboard()
+                        if original_clipboard_data:
+                            win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
+                        win32clipboard.CloseClipboard()
+                        
+                        return
+                    except Exception as win32_err:
+                        logging.warning(f"SendInput failed: {win32_err}, trying fallback paste method")
+                        
+                    # Try another Windows-specific method with UI Automation
+                    try:
+                        # Use Windows UI Automation API to paste if available
+                        cmd = 'powershell -command "[Windows.UI.Input.KeyboardInput,Windows.UI]::SendAcceleratorKey(17, 86)"'
+                        subprocess.run(cmd, shell=True, capture_output=True)
+                        time.sleep(0.3)
+                        logging.info("Pasted with Windows UI Automation API")
+                        
+                        # Add a space after pasting
+                        time.sleep(0.1)
+                        pyautogui.press('space')
+                        
+                        # Restore original clipboard
+                        time.sleep(0.3)
+                        win32clipboard.OpenClipboard()
+                        win32clipboard.EmptyClipboard()
+                        if original_clipboard_data:
+                            win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
+                        win32clipboard.CloseClipboard()
+                        
+                        return
+                    except Exception as automation_err:
+                        logging.warning(f"Windows UI Automation paste failed: {automation_err}")
+                        
+                except Exception as win32_err:
+                    logging.warning(f"Direct Win32 clipboard method failed: {win32_err}")
+                    # Continue to other methods
+            
+            # FALLBACK METHODS
+            
+            # Save original clipboard content
+            try:
+                original_clipboard = pyperclip.paste()
+            except Exception as clip_err:
+                logging.warning(f"Failed to get original clipboard: {clip_err}")
+                original_clipboard = ""
+            
+            # Copy recognized text to clipboard
+            try:
+                pyperclip.copy(text)
+                time.sleep(0.5)  # Increased wait time for clipboard
+            except Exception as copy_err:
+                logging.warning(f"Failed to copy to clipboard: {copy_err}")
+            
+            # Try multiple paste methods
+            paste_success = False
+            
+            # Method 1: pyautogui hotkey
+            if not paste_success:
+                try:
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.3)
+                    paste_success = True
+                    logging.info("Pasted text using pyautogui hotkey")
+                except Exception as paste_err:
+                    logging.warning(f"pyautogui paste failed: {paste_err}")
+            
+            # Method 2: keyDown/keyUp approach
+            if not paste_success:
+                try:
+                    pyautogui.keyDown('ctrl')
+                    time.sleep(0.1)
+                    pyautogui.press('v')
+                    time.sleep(0.1)
+                    pyautogui.keyUp('ctrl')
+                    time.sleep(0.3)
+                    paste_success = True
+                    logging.info("Pasted text using keyDown/keyUp method")
+                except Exception as paste_err2:
+                    logging.warning(f"keyDown/keyUp paste failed: {paste_err2}")
+            
+            # Method 3: keyboard module
+            if not paste_success:
+                try:
+                    import keyboard
+                    keyboard.press_and_release('ctrl+v')
+                    time.sleep(0.3)
+                    paste_success = True
+                    logging.info("Pasted text using keyboard module")
+                except Exception as kb_err:
+                    logging.warning(f"keyboard module paste failed: {kb_err}")
+            
+            # Method 4: Windows-specific SendKeys
+            if not paste_success and os.name == 'nt':
+                try:
+                    cmd = 'powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^v\')"'
+                    subprocess.run(cmd, shell=True)
+                    time.sleep(0.5)
+                    paste_success = True
+                    logging.info("Pasted text using PowerShell SendKeys")
+                except Exception as ps_err:
+                    logging.warning(f"PowerShell SendKeys paste failed: {ps_err}")
+            
+            # Add a space after pasting if any method succeeded
+            if paste_success:
+                time.sleep(0.1)
+                pyautogui.press('space')
+            
+            # Restore original clipboard
+            try:
+                time.sleep(0.3)
+                pyperclip.copy(original_clipboard)
+            except Exception as restore_err:
+                logging.warning(f"Failed to restore clipboard: {restore_err}")
+                
         except sr.UnknownValueError:
             logging.warning("Could not understand audio")
         except sr.RequestError as e:
             logging.error(f"Speech recognition error: {e}")
         except Exception as e:
             logging.error(f"Unexpected error in speech recognition: {e}")
+            
+    def ask_chatgpt(self, audio_data, config):
+        """Process speech through Whisper and send to ChatGPT"""
+        try:
+            # Extract configuration
+            api_key = config.get("api_key", "")
+            model = config.get("model", "gpt-4o")
+            language = config.get("language", "en-US")
+            system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+            
+            if not api_key:
+                self.message_signal.emit("Error: No API key provided")
+                self.notification_signal.emit("Error: No API key provided", "ask_chatgpt")
+                return
+                
+            # Configure OpenAI client
+            client = openai.OpenAI(
+                api_key=api_key,
+                base_url="https://api.openai.com/v1"  # Ensure the official API endpoint is used
+            )
+            
+            # Show processing notification
+            self.message_signal.emit(f"Processing speech and waiting for {model} response...")
+            self.notification_signal.emit(f"Processing speech and waiting for {model} response...", "ask_chatgpt")
+            
+            # Generate a unique temporary filename
+            temp_dir = tempfile.gettempdir()
+            temp_filename = os.path.join(temp_dir, f"chatgpt_audio_{int(time.time())}.wav")
+            
+            try:
+                # Create a proper WAV file with headers
+                with wave.open(temp_filename, 'wb') as wf:
+                    wf.setnchannels(1)  # Mono audio
+                    wf.setsampwidth(2)  # 16-bit audio (2 bytes)
+                    wf.setframerate(44100)  # Sample rate
+                    wf.writeframes(audio_data)
+                
+                # Make sure the file is properly closed before opening it again
+                time.sleep(0.1)
+                
+                # Use the WAV file for the API request
+                with open(temp_filename, 'rb') as audio_file:
+                    # Use the Whisper API to convert speech to text
+                    whisper_response = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        language=language[:2] if language else None  # Only use language code, e.g., "en" from "en-US"
+                    )
+                    
+                    transcribed_text = whisper_response.text
+                    logger.info(f"Whisper transcription: {transcribed_text}")
+                    
+                    if not transcribed_text:
+                        self.message_signal.emit("No speech detected")
+                        self.notification_signal.emit("No speech detected", "ask_chatgpt")
+                        return
+                    
+                # Make sure audio file handle is closed before attempting to delete
+                time.sleep(0.1)
+                
+                # Log the model being used to help with debugging
+                logger.info(f"Using OpenAI model: {model}")
+                        
+                # Now, send transcribed text to ChatGPT
+                logger.info(f"Sending request to ChatGPT with model: {model}, system prompt: {system_prompt[:50]}...")
+                
+                chat_response = client.chat.completions.create(
+                    model=model,  # Explicitly use the selected model
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": transcribed_text}
+                    ]
+                )
+                
+                # Log the actual model used in the response
+                model_used = chat_response.model
+                logger.info(f"Actual model used in response: {model_used}")
+                if model != model_used:
+                    logger.warning(f"Model mismatch! Requested: {model}, Received: {model_used}")
+                
+                # Extract the response
+                chatgpt_response = chat_response.choices[0].message.content
+                
+                # WINDOWS DIRECT CLIPBOARD API METHOD (most reliable on Windows)
+                if WIN32CLIPBOARD_AVAILABLE and platform.system() == "Windows":
+                    try:
+                        logger.info("Using Win32 clipboard API for paste operation")
+                        
+                        # Save original clipboard content
+                        original_clipboard_data = None
+                        win32clipboard.OpenClipboard()
+                        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                            original_clipboard_data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+                        win32clipboard.EmptyClipboard()
+                        
+                        # Set new clipboard content
+                        win32clipboard.SetClipboardText(chatgpt_response, win32con.CF_UNICODETEXT)
+                        win32clipboard.CloseClipboard()
+                        
+                        time.sleep(0.5)  # Increased time for clipboard to register
+                        
+                        # Try both keybd_event and multiple other methods for better reliability
+                        # Method 1: Use keybd_event (simpler and often more reliable)
+                        try:
+                            # Define the input constants
+                            KEYEVENTF_KEYDOWN = 0x0000
+                            KEYEVENTF_KEYUP = 0x0002
+                            
+                            # Direct Windows API approach
+                            ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYDOWN, 0)  # Ctrl down
+                            time.sleep(0.05)
+                            ctypes.windll.user32.keybd_event(0x56, 0, KEYEVENTF_KEYDOWN, 0)  # V down
+                            time.sleep(0.05)
+                            ctypes.windll.user32.keybd_event(0x56, 0, KEYEVENTF_KEYUP, 0)    # V up
+                            time.sleep(0.05)
+                            ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)    # Ctrl up
+                            
+                            time.sleep(0.5)  # Longer delay to ensure paste completes
+                            logger.info("Pasted using direct keybd_event Windows API")
+                            
+                            # Restore original clipboard
+                            time.sleep(0.5)  # Increased delay before restoring clipboard
+                            win32clipboard.OpenClipboard()
+                            win32clipboard.EmptyClipboard()
+                            if original_clipboard_data:
+                                win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
+                            win32clipboard.CloseClipboard()
+                            
+                            # Log success
+                            self.message_signal.emit(f"Model {model_used} response received and pasted")
+                            self.notification_signal.emit(f"Model {model_used} response received", "ask_chatgpt")
+                            return
+                        except Exception as win32_err:
+                            logger.warning(f"keybd_event failed: {win32_err}, trying fallback paste method")
+                            
+                        # Method 2: PowerShell SendKeys approach
+                        try:
+                            # Use Windows PowerShell to send keystrokes
+                            cmd = 'powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^v\')"'
+                            subprocess.run(cmd, shell=True, capture_output=True)
+                            time.sleep(0.5)  # Longer delay
+                            logger.info("Pasted with PowerShell SendKeys")
+                            
+                            # Restore original clipboard
+                            time.sleep(0.5)
+                            win32clipboard.OpenClipboard()
+                            win32clipboard.EmptyClipboard()
+                            if original_clipboard_data:
+                                win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
+                            win32clipboard.CloseClipboard()
+                            
+                            # Log success
+                            self.message_signal.emit(f"Model {model_used} response received and pasted")
+                            self.notification_signal.emit(f"Model {model_used} response received", "ask_chatgpt")
+                            return
+                        except Exception as automation_err:
+                            logger.warning(f"PowerShell SendKeys paste failed: {automation_err}")
+                            
+                    except Exception as win32_err:
+                        logger.warning(f"Direct Win32 clipboard method failed: {win32_err}")
+                        # Continue to other methods
+
+                # Save original clipboard content
+                try:
+                    original_clipboard = pyperclip.paste()
+                except Exception as clip_err:
+                    logger.warning(f"Failed to get original clipboard: {clip_err}")
+                    original_clipboard = ""
+                
+                # Copy response to clipboard and paste it
+                try:
+                    pyperclip.copy(chatgpt_response)
+                    time.sleep(0.7)  # Increased delay for clipboard operations
+                except Exception as copy_err:
+                    logger.warning(f"Failed to copy to clipboard: {copy_err}")
+                
+                # Try multiple paste methods
+                paste_success = False
+                
+                # Method 1: pyautogui hotkey
+                if not paste_success:
+                    try:
+                        pyautogui.hotkey('ctrl', 'v')
+                        time.sleep(0.5)  # Increased delay
+                        paste_success = True
+                        logger.info("Pasted text using pyautogui hotkey")
+                    except Exception as paste_err:
+                        logger.warning(f"pyautogui paste failed: {paste_err}")
+                
+                # Method 2: keyDown/keyUp approach
+                if not paste_success:
+                    try:
+                        pyautogui.keyDown('ctrl')
+                        time.sleep(0.2)  # Increased delay
+                        pyautogui.press('v')
+                        time.sleep(0.2)  # Increased delay
+                        pyautogui.keyUp('ctrl')
+                        time.sleep(0.5)  # Increased delay
+                        paste_success = True
+                        logger.info("Pasted text using keyDown/keyUp method")
+                    except Exception as paste_err2:
+                        logger.warning(f"keyDown/keyUp paste failed: {paste_err2}")
+                
+                # Method 3: keyboard module
+                if not paste_success and 'keyboard' in sys.modules:
+                    try:
+                        import keyboard
+                        keyboard.press_and_release('ctrl+v')
+                        time.sleep(0.5)  # Increased delay
+                        paste_success = True
+                        logger.info("Pasted text using keyboard module")
+                    except Exception as kb_err:
+                        logger.warning(f"keyboard module paste failed: {kb_err}")
+                
+                # Method 4: Windows-specific SendKeys
+                if not paste_success and os.name == 'nt':
+                    try:
+                        cmd = 'powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^v\')"'
+                        subprocess.run(cmd, shell=True)
+                        time.sleep(0.7)  # Increased delay
+                        paste_success = True
+                        logger.info("Pasted text using PowerShell SendKeys")
+                    except Exception as ps_err:
+                        logger.warning(f"PowerShell SendKeys paste failed: {ps_err}")
+                
+                # Restore original clipboard
+                try:
+                    time.sleep(0.5)  # Increased delay
+                    pyperclip.copy(original_clipboard)
+                except Exception as restore_err:
+                    logger.warning(f"Failed to restore clipboard: {restore_err}")
+                
+                # Log success
+                paste_result = "and pasted" if paste_success else "but paste failed"
+                self.message_signal.emit(f"Model {model_used} response received {paste_result}")
+                self.notification_signal.emit(f"Model {model_used} response received", "ask_chatgpt")
+                    
+            finally:
+                # Clean up the temporary file with multiple attempts
+                for attempt in range(3):
+                    try:
+                        if os.path.exists(temp_filename):
+                            os.close(os.open(temp_filename, os.O_RDONLY))  # Ensure file is closed
+                            time.sleep(0.2)  # Allow time for file handle to be released
+                            os.unlink(temp_filename)
+                            break
+                    except Exception as e:
+                        if attempt < 2:  # Don't log error on first two attempts
+                            time.sleep(0.5)  # Wait longer before next attempt
+                        else:
+                            logger.error(f"Error removing temporary file (attempt {attempt+1}): {e}")
+                            # If we can't delete now, mark for deletion on reboot (Windows-specific)
+                            try:
+                                if os.name == 'nt' and os.path.exists(temp_filename):
+                                    import ctypes
+                                    ctypes.windll.kernel32.MoveFileExW(temp_filename, None, 4)  # MOVEFILE_DELAY_UNTIL_REBOOT
+                            except:
+                                pass
+                
+        except openai.APIError as e:
+            error_message = f"OpenAI API error: {str(e)}"
+            logger.error(error_message)
+            self.message_signal.emit(error_message)
+            self.notification_signal.emit(error_message, "ask_chatgpt")
+                
+        except Exception as e:
+            error_message = f"Error in ChatGPT processing: {str(e)}"
+            logger.error(error_message)
+            self.message_signal.emit(error_message)
+            self.notification_signal.emit(error_message, "ask_chatgpt")
 
     def update_button_style(self, button_id, is_pressed):
         """Update button appearance based on pressed state and configuration"""
@@ -1548,7 +2102,7 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
                 if result:
                     action_desc = config.get("name", f"Button {button_id}")
                     logger.info(f"Action successful for {action_desc}")
-                    if action_type not in ["speech_to_text", "media", "audio_device"]:
+                    if action_type not in ["speech_to_text", "ask_chatgpt", "media", "audio_device"]:
                         self.notification_manager.show_notification(f"Action applied: {action_desc}", 'button_action')
                     return True
                 else:
@@ -1658,7 +2212,7 @@ class ButtonConfigDialog(QtWidgets.QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        # Modern header with button info and gradient background
+        # Modern header with gradient background
         header_card = QtWidgets.QFrame()
         header_card.setObjectName("headerCard")
         header_card.setStyleSheet(f"""
@@ -1671,7 +2225,7 @@ class ButtonConfigDialog(QtWidgets.QDialog):
         """)
         header_layout = QtWidgets.QHBoxLayout(header_card)
         
-        # Button icon with dynamic color
+        # Icon with specific styling
         icon_label = QtWidgets.QLabel()
         icon_label.setFixedSize(48, 48)
         # Different colors based on button_id
@@ -1776,20 +2330,20 @@ class ButtonConfigDialog(QtWidgets.QDialog):
         
         self.display_to_internal = {}
         
-        # Define icons for action types
-        action_icons = {
-            'app': "🔵", 
-            'toggle_app': "🔄", 
-            'web': "🌐", 
-            'volume': "🔊", 
-            'media': "▶️", 
-            'shortcut': "⌨️", 
-            'audio_device': "🎧", 
-            'command': "💻", 
-            'powershell': "🖥️", 
-            'text': "📝", 
-            'screen': "📷", 
-            'speech_to_text': "🎤"
+        # Set up action icons for display
+        action_type_icons = {
+            'app': "🚀",
+            'toggle_app': "⚡",
+            'web': "🌐",
+            'volume': "🔊",
+            'media': "▶️",
+            'shortcut': "⌨️",
+            'audio_device': "🔈",
+            'command': "💻",
+            'powershell': "🔷",
+            'text': "📝",
+            'speech_to_text': "🎤",
+            'ask_chatgpt': "🤖"
         }
         
         # Create a grid of action type buttons
@@ -1837,7 +2391,7 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             btn_layout.setSpacing(5)
             
             # Add icon and text
-            icon_text = QtWidgets.QLabel(action_icons.get(key, ""))
+            icon_text = QtWidgets.QLabel(action_type_icons.get(key, ""))
             icon_text.setStyleSheet("font-size: 18px; background-color: transparent; border: none;")
             
             name_text = QtWidgets.QLabel(info['name'])
@@ -2396,6 +2950,143 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             speech_layout.addWidget(help_label)
             
             self.action_form_layout.addWidget(speech_frame)
+        
+        elif action_type == "ask_chatgpt":
+            chatgpt_frame = QtWidgets.QFrame()
+            chatgpt_frame.setStyleSheet("background-color: #252525; border-radius: 6px; padding: 10px;")
+            chatgpt_layout = QtWidgets.QVBoxLayout(chatgpt_frame)
+            chatgpt_layout.setSpacing(10)
+            
+            # Header with icon
+            header_layout = QtWidgets.QHBoxLayout()
+            header_icon = QtWidgets.QLabel("🤖")
+            header_icon.setStyleSheet("font-size: 16px;")
+            header_text = QtWidgets.QLabel("Ask ChatGPT")
+            header_text.setStyleSheet("font-weight: bold; color: #CCCCCC;")
+            header_layout.addWidget(header_icon)
+            header_layout.addWidget(header_text)
+            header_layout.addStretch()
+            chatgpt_layout.addLayout(header_layout)
+            
+            # API Key
+            api_key_layout = QtWidgets.QHBoxLayout()
+            api_key_label = QtWidgets.QLabel("API Key:")
+            api_key_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["api_key"] = QtWidgets.QLineEdit(existing_data.get("api_key", ""))
+            self.form_widgets["api_key"].setStyleSheet(LINEEDIT_STYLE)
+            self.form_widgets["api_key"].setPlaceholderText("Enter your OpenAI API key")
+            self.form_widgets["api_key"].setEchoMode(QtWidgets.QLineEdit.Password)
+            
+            api_key_layout.addWidget(api_key_label)
+            api_key_layout.addWidget(self.form_widgets["api_key"])
+            chatgpt_layout.addLayout(api_key_layout)
+            
+            # Model selection
+            model_layout = QtWidgets.QHBoxLayout()
+            model_label = QtWidgets.QLabel("Model:")
+            model_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["model"] = QtWidgets.QComboBox()
+            self.form_widgets["model"].setStyleSheet(COMBOBOX_STYLE)
+            models = ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"]
+            model_display_names = {
+                "gpt-4o": "GPT-4o (Latest)",
+                "gpt-4o-mini": "GPT-4o Mini (Faster)",
+                "gpt-4": "GPT-4 (Older)",
+                "gpt-3.5-turbo": "GPT-3.5 Turbo (Fastest)"
+            }
+            
+            for model_id in models:
+                self.form_widgets["model"].addItem(model_display_names[model_id], model_id)
+            
+            current_model = existing_data.get("model", "gpt-4o")
+            for i in range(self.form_widgets["model"].count()):
+                if self.form_widgets["model"].itemData(i) == current_model:
+                    self.form_widgets["model"].setCurrentIndex(i)
+                    break
+            
+            model_layout.addWidget(model_label)
+            model_layout.addWidget(self.form_widgets["model"])
+            chatgpt_layout.addLayout(model_layout)
+            
+            # Language selection
+            lang_layout = QtWidgets.QHBoxLayout()
+            lang_label = QtWidgets.QLabel("Language:")
+            lang_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["language_chatgpt"] = QtWidgets.QComboBox()
+            self.form_widgets["language_chatgpt"].setStyleSheet(COMBOBOX_STYLE)
+            languages = {
+                "English (US)": "en-US",
+                "English (UK)": "en-GB", 
+                "English (Australia)": "en-AU",
+                "English (Canada)": "en-CA",
+                "English (India)": "en-IN",
+                "Russian": "ru-RU",
+                "Spanish (Spain)": "es-ES",
+                "Spanish (Mexico)": "es-MX",
+                "Spanish (US)": "es-US",
+                "French (France)": "fr-FR",
+                "French (Canada)": "fr-CA",
+                "German": "de-DE",
+                "Italian": "it-IT",
+                "Portuguese (Brazil)": "pt-BR",
+                "Portuguese (Portugal)": "pt-PT",
+                "Japanese": "ja-JP",
+                "Korean": "ko-KR",
+                "Chinese (Mandarin)": "zh-CN",
+                "Chinese (Taiwan)": "zh-TW",
+                "Chinese (Cantonese)": "zh-HK",
+                "Arabic": "ar-SA",
+                "Dutch": "nl-NL",
+                "Swedish": "sv-SE",
+                "Danish": "da-DK",
+                "Finnish": "fi-FI",
+                "Polish": "pl-PL",
+                "Greek": "el-GR",
+                "Hindi": "hi-IN",
+                "Turkish": "tr-TR",
+                "Vietnamese": "vi-VN",
+                "Thai": "th-TH",
+                "Indonesian": "id-ID",
+                "Ukrainian": "uk-UA"
+            }
+            self.language_map_chatgpt = languages
+            self.form_widgets["language_chatgpt"].addItems(languages.keys())
+            language_code = existing_data.get("language", "en-US")
+            display_lang = next((k for k, v in languages.items() if v == language_code), "English (US)")
+            self.form_widgets["language_chatgpt"].setCurrentText(display_lang)
+            
+            lang_layout.addWidget(lang_label)
+            lang_layout.addWidget(self.form_widgets["language_chatgpt"])
+            chatgpt_layout.addLayout(lang_layout)
+            
+            # System prompt
+            system_layout = QtWidgets.QVBoxLayout()
+            system_label = QtWidgets.QLabel("System Prompt:")
+            system_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["system_prompt"] = QtWidgets.QTextEdit(existing_data.get("system_prompt", "You are a helpful assistant."))
+            self.form_widgets["system_prompt"].setStyleSheet("""
+                background-color: #303030;
+                color: #CCCCCC;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                padding: 5px;
+            """)
+            self.form_widgets["system_prompt"].setFixedHeight(80)
+            
+            system_layout.addWidget(system_label)
+            system_layout.addWidget(self.form_widgets["system_prompt"])
+            chatgpt_layout.addLayout(system_layout)
+            
+            # Help text
+            help_label = QtWidgets.QLabel("Hold button to record speech, release to send to ChatGPT and paste response")
+            help_label.setStyleSheet("color: #888888; font-style: italic; font-size: 12px;")
+            chatgpt_layout.addWidget(help_label)
+            
+            self.action_form_layout.addWidget(chatgpt_frame)
                       
         # Add stretch to ensure everything aligns to the top
         self.action_form_layout.addStretch()
@@ -2429,6 +3120,13 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             action_data["text"] = self.form_widgets.get("text", QtWidgets.QLineEdit()).text()
         elif action_type == "speech_to_text":
             action_data["language"] = self.language_map.get(self.form_widgets.get("language", QtWidgets.QComboBox()).currentText(), "en-US")
+        elif action_type == "ask_chatgpt":
+            action_data["api_key"] = self.form_widgets.get("api_key", QtWidgets.QLineEdit()).text()
+            model_combobox = self.form_widgets.get("model", QtWidgets.QComboBox())
+            model_index = model_combobox.currentIndex()
+            action_data["model"] = model_combobox.itemData(model_index)
+            action_data["language"] = self.language_map_chatgpt.get(self.form_widgets.get("language_chatgpt", QtWidgets.QComboBox()).currentText(), "en-US")
+            action_data["system_prompt"] = self.form_widgets.get("system_prompt", QtWidgets.QTextEdit()).toPlainText()
         
         
         return action_data
@@ -2767,6 +3465,7 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
             ("audio_device", "Audio Device Connection"),
             ("midi_connection", "MIDI Connection"),
             ("speech_to_text", "Speech Recognition"),
+            ("ask_chatgpt", "Ask ChatGPT"),
             ("music_track", "Music Tracks"),
             ("play_pause_track", "Play/Pause Status")
         ]

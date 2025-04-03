@@ -206,6 +206,10 @@ def get_action_types():
         "speech_to_text": {
             "name": "Speech to Text",
             "description": "Recognize speech and type it as text while holding the button."
+        },
+        "ask_chatgpt": {
+            "name": "Ask ChatGPT",
+            "description": "Record speech while holding the button, send to ChatGPT, and paste the response."
         }
     }
 

@@ -561,6 +561,7 @@ class NotificationManager:
                 "input_device_selected": True,
                 "device_change": True,  # For backward compatibility
                 "play_pause_track": True,  # Added for play/pause track notifications
+                "ask_chatgpt": True,      # Added for ChatGPT integration
             },
             'theme': 'dark',
             'position': 'bottom-right',
