@@ -1,4 +1,5 @@
 # WORLDE EASYPAD.12 Controller
+- Discord: https://discord.gg/3ZHmwVuA9u
 Adds multifunctional controls in Windows 10/11 to your favorite WORLDE EASYPAD.12
 ![image](https://github.com/user-attachments/assets/3454a86c-b0e0-4f52-baf0-794052dd0bd3)
 ![image](https://github.com/user-attachments/assets/0f775e4a-8221-4d4c-8c4f-9b240f9e4a79)
