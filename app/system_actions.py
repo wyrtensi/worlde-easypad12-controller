@@ -930,272 +930,91 @@ class SystemActions:
                 logger.error("No text specified for typing")
                 return False
 
-            logger.info(f"Typing text: {text[:20]}...")
+            # Get optimization parameters
+            force_unicode = params.get("force_unicode", True)  # Default to True for language preservation
+            typing_speed = params.get("typing_speed", "fast")  # 'fast', 'balanced', 'reliable', 'auto'
             
-            # Primary method: use pyautogui's write function
-            try:
-                pyautogui.write(text)
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to type text directly with pyautogui: {e}, trying clipboard method")
+            # Text length will determine the optimal strategy
+            text_length = len(text)
+            logger.info(f"Typing text ({text_length} chars): {text[:20]}...")
+            
+            # Auto-select speed based on text length
+            if typing_speed == "auto":
+                if text_length <= 20:
+                    typing_speed = "reliable"  # For very short texts, prioritize reliability
+                elif text_length <= 100:
+                    typing_speed = "balanced"  # For medium texts, use balanced approach
+                else:
+                    typing_speed = "fast"      # For long texts, prioritize speed
+            
+            # Determine character delay based on typing_speed
+            char_delay = 0.01  # Default
+            if typing_speed == "fast":
+                char_delay = 0.005
+            elif typing_speed == "balanced":
+                char_delay = 0.01
+            elif typing_speed == "reliable":
+                char_delay = 0.02
                 
-            # Method 0: Direct Windows clipboard API (most reliable on Windows)
-            if WIN32CLIPBOARD_AVAILABLE and self.system == "Windows":
-                try:
-                    logger.info("Attempting to use direct Win32 clipboard API")
-                    
-                    # Save original clipboard content
-                    original_clipboard_data = None
-                    win32clipboard.OpenClipboard()
-                    if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                        original_clipboard_data = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-                    win32clipboard.EmptyClipboard()
-                    
-                    # Set new clipboard content
-                    win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
-                    win32clipboard.CloseClipboard()
-                    
-                    time.sleep(0.5)  # Increased time for clipboard to register
-                    
-                    # Try to paste using keybd_event for most reliable input (similar to ask_chatgpt)
-                    try:
-                        # Define the input constants
-                        KEYEVENTF_KEYDOWN = 0x0000
-                        KEYEVENTF_KEYUP = 0x0002
-                        
-                        # More reliable direct Windows API approach
-                        ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYDOWN, 0)  # Ctrl down
-                        time.sleep(0.05)
-                        ctypes.windll.user32.keybd_event(0x56, 0, KEYEVENTF_KEYDOWN, 0)  # V down
-                        time.sleep(0.05)
-                        ctypes.windll.user32.keybd_event(0x56, 0, KEYEVENTF_KEYUP, 0)    # V up
-                        time.sleep(0.05)
-                        ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)    # Ctrl up
-                        
-                        time.sleep(0.3)
-                        logger.info("Pasted using direct keybd_event Windows API")
-                        
-                        # Restore original clipboard
-                        time.sleep(0.5)  # Increased delay before restoring clipboard
-                        win32clipboard.OpenClipboard()
-                        win32clipboard.EmptyClipboard()
-                        if original_clipboard_data:
-                            win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
-                        win32clipboard.CloseClipboard()
-                        
-                        return True
-                    except Exception as win32_err:
-                        logger.warning(f"keybd_event failed: {win32_err}, trying another method")
-                    
-                    # Try SendInput method if keybd_event failed
-                    try:
-                        # Import necessary ctypes structures
-                        from ctypes import Structure, c_ulong, c_ushort, POINTER, sizeof, byref
-                        
-                        class KeyboardInput(Structure):
-                            _fields_ = [
-                                ("wVk", c_ushort),
-                                ("wScan", c_ushort),
-                                ("dwFlags", c_ulong),
-                                ("time", c_ulong),
-                                ("dwExtraInfo", POINTER(c_ulong))
-                            ]
-                        
-                        class HardwareInput(Structure):
-                            _fields_ = [
-                                ("uMsg", c_ulong),
-                                ("wParamL", c_ushort),
-                                ("wParamH", c_ushort)
-                            ]
-                        
-                        class MouseInput(Structure):
-                            _fields_ = [
-                                ("dx", c_ulong),
-                                ("dy", c_ulong),
-                                ("mouseData", c_ulong),
-                                ("dwFlags", c_ulong),
-                                ("time", c_ulong),
-                                ("dwExtraInfo", POINTER(c_ulong))
-                            ]
-                        
-                        class InputUnion(ctypes.Union):
-                            _fields_ = [
-                                ("ki", KeyboardInput),
-                                ("mi", MouseInput),
-                                ("hi", HardwareInput)
-                            ]
-                        
-                        class Input(Structure):
-                            _fields_ = [
-                                ("type", c_ulong),
-                                ("ii", InputUnion)
-                            ]
-                        
-                        # Create input array for Ctrl+V sequence
-                        inputs = (Input * 4)()
-                        
-                        # VK_CONTROL down
-                        inputs[0].type = 1  # INPUT_KEYBOARD
-                        inputs[0].ii.ki.wVk = 0x11  # VK_CONTROL
-                        inputs[0].ii.ki.dwFlags = KEYEVENTF_KEYDOWN
-                        
-                        # V key down
-                        inputs[1].type = 1  # INPUT_KEYBOARD
-                        inputs[1].ii.ki.wVk = 0x56  # V key
-                        inputs[1].ii.ki.dwFlags = KEYEVENTF_KEYDOWN
-                        
-                        # V key up
-                        inputs[2].type = 1  # INPUT_KEYBOARD
-                        inputs[2].ii.ki.wVk = 0x56  # V key
-                        inputs[2].ii.ki.dwFlags = KEYEVENTF_KEYUP
-                        
-                        # VK_CONTROL up
-                        inputs[3].type = 1  # INPUT_KEYBOARD
-                        inputs[3].ii.ki.wVk = 0x11  # VK_CONTROL
-                        inputs[3].ii.ki.dwFlags = KEYEVENTF_KEYUP
-                        
-                        # Send input
-                        ctypes.windll.user32.SendInput(4, byref(inputs), sizeof(Input))
-                        time.sleep(0.3)
-                        logger.info("Pasted using direct SendInput Windows API")
-                        
-                        # Restore original clipboard
-                        time.sleep(0.5)  # Increased delay
-                        win32clipboard.OpenClipboard()
-                        win32clipboard.EmptyClipboard()
-                        if original_clipboard_data:
-                            win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
-                        win32clipboard.CloseClipboard()
-                        
-                        return True
-                    except Exception as win32_err:
-                        logger.warning(f"SendInput failed: {win32_err}, trying fallback paste method")
-                        
-                    # Try another Windows-specific method with UI Automation
-                    try:
-                        # Use Windows UI Automation API to paste if available
-                        cmd = 'powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^v\')"'
-                        subprocess.run(cmd, shell=True, capture_output=True)
-                        time.sleep(0.3)
-                        logger.info("Pasted with PowerShell SendKeys")
-                        
-                        # Restore original clipboard
-                        time.sleep(0.5)  # Increased delay
-                        win32clipboard.OpenClipboard()
-                        win32clipboard.EmptyClipboard()
-                        if original_clipboard_data:
-                            win32clipboard.SetClipboardText(original_clipboard_data, win32con.CF_UNICODETEXT)
-                        win32clipboard.CloseClipboard()
-                        
-                        return True
-                    except Exception as automation_err:
-                        logger.warning(f"PowerShell SendKeys paste failed: {automation_err}")
-                        
-                    # At this point we'll continue with other methods but with the
-                    # text already in clipboard from the win32clipboard API
-                        
-                except Exception as win32_err:
-                    logger.warning(f"Direct Win32 clipboard method failed: {win32_err}")
-                    # Continue to other methods
+            # ----- STRATEGY SELECTION: PRIORITIZE BY TEXT LENGTH -----
             
-            # Fallback method 1: Use clipboard for longer or complex text
+            # For longer texts, clipboard is much faster
+            if text_length > 50 or typing_speed == "fast":
+                # Try clipboard method first for longer texts (fastest)
+                if self.system == "Windows":
+                    clipboard_success = self._paste_text_via_clipboard(text)
+                    if clipboard_success:
+                        return True
+                elif PYPERCLIP_AVAILABLE:
+                    clipboard_success = self._paste_text_via_pyperclip(text)
+                    if clipboard_success:
+                        return True
+            
+            # For Unicode text on Windows, use SendInput with batched characters
+            if force_unicode and self.system == "Windows" and text_length <= 500:
+                # For medium-length texts, batch SendInput is efficient
+                batch_size = 10 if typing_speed == "fast" else 5
+                success = self._type_text_unicode_batch(text, batch_size, char_delay)
+                if success:
+                    return True
+            
+            # For short texts or if previous methods failed, try pyautogui
+            if text_length <= 100:
+                try:
+                    if typing_speed == "fast":
+                        # For short texts, pyautogui.write is fast
+                        pyautogui.write(text)
+                    else:
+                        # Safer character by character approach for better reliability
+                        for char in text:
+                            pyautogui.write(char)
+                            time.sleep(char_delay) 
+                    logger.info("Text typed using pyautogui")
+                    return True
+                except Exception as e:
+                    logger.warning(f"Failed to type text with pyautogui: {e}")
+            
+            # If we're here, either text is very long or previous methods failed
+            # Try clipboard method as fallback (most reliable for long text)
+            if self.system == "Windows":
+                clipboard_success = self._paste_text_via_clipboard(text)
+                if clipboard_success:
+                    return True
+            
             if PYPERCLIP_AVAILABLE:
-                try:
-                    # Save original clipboard content
-                    try:
-                        original_clipboard = pyperclip.paste()
-                    except Exception as clip_err:
-                        logger.warning(f"Failed to get original clipboard: {clip_err}")
-                        original_clipboard = ""
-                    
-                    # Try multiple ways to copy text to clipboard
-                    copy_success = False
-                    try:
-                        pyperclip.copy(text)
-                        time.sleep(0.5)  # Increased wait time for clipboard
-                        copy_success = True
-                    except Exception as copy_err:
-                        logger.warning(f"pyperclip copy failed: {copy_err}")
-                    
-                    # Verify clipboard content
-                    try:
-                        clipboard_content = pyperclip.paste()
-                        if clipboard_content != text:
-                            logger.warning(f"Clipboard verification failed. Expected: {text[:20]}..., Got: {clipboard_content[:20]}...")
-                        else:
-                            logger.debug("Clipboard content verified successfully")
-                    except Exception as verify_err:
-                        logger.warning(f"Failed to verify clipboard: {verify_err}")
-                    
-                    # Try multiple paste methods
-                    paste_success = False
-                    
-                    # Method 1: pyautogui paste
-                    if not paste_success:
-                        try:
-                            # Try with small delay between key presses
-                            pyautogui.keyDown('ctrl')
-                            time.sleep(0.1)
-                            pyautogui.press('v')
-                            time.sleep(0.1)
-                            pyautogui.keyUp('ctrl')
-                            time.sleep(0.3)
-                            paste_success = True
-                            logger.info("Pasted text using pyautogui keyDown/keyUp method")
-                        except Exception as paste_err1:
-                            logger.warning(f"pyautogui keyDown/keyUp paste failed: {paste_err1}")
-                    
-                    # Method 2: pyautogui hotkey
-                    if not paste_success:
-                        try:
-                            pyautogui.hotkey('ctrl', 'v')
-                            time.sleep(0.3)
-                            paste_success = True
-                            logger.info("Pasted text using pyautogui hotkey method")
-                        except Exception as paste_err2:
-                            logger.warning(f"pyautogui hotkey paste failed: {paste_err2}")
-                    
-                    # Method 3: keyboard module
-                    if not paste_success and KEYBOARD_AVAILABLE:
-                        try:
-                            keyboard.press_and_release('ctrl+v')
-                            time.sleep(0.3)
-                            paste_success = True
-                            logger.info("Pasted text using keyboard module")
-                        except Exception as kb_err:
-                            logger.warning(f"keyboard module paste failed: {kb_err}")
-                    
-                    # Method 4: Windows-specific SendKeys via PowerShell
-                    if not paste_success and self.system == "Windows":
-                        try:
-                            cmd = 'powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^v\')"'
-                            subprocess.run(cmd, shell=True)
-                            time.sleep(0.5)
-                            paste_success = True
-                            logger.info("Pasted text using PowerShell SendKeys")
-                        except Exception as ps_err:
-                            logger.warning(f"PowerShell SendKeys paste failed: {ps_err}")
-                    
-                    # Restore original clipboard after a delay
-                    time.sleep(0.5)
-                    try:
-                        pyperclip.copy(original_clipboard)
-                    except Exception as restore_err:
-                        logger.warning(f"Failed to restore clipboard: {restore_err}")
-                    
-                    if paste_success:
-                        return True
-                        
-                except Exception as clip_err:
-                    logger.warning(f"Clipboard fallback method failed: {clip_err}")
-            else:
-                logger.warning("pyperclip not available for clipboard fallback")
+                clipboard_success = self._paste_text_via_pyperclip(text)
+                if clipboard_success:
+                    return True
             
-            # Fallback method 2: Type character by character with delay
+            # Ultimate fallback - character by character with minimal delay
+            logger.info("Using character-by-character typing as last resort")
             try:
                 for char in text:
-                    pyautogui.write(char)
-                    time.sleep(0.01)  # Small delay between characters
+                    try:
+                        pyautogui.write(char)
+                        time.sleep(0.01)  # Minimal delay
+                    except Exception as char_err:
+                        logger.warning(f"Failed to type character {char}: {char_err}")
                 return True
             except Exception as char_err:
                 logger.error(f"Character-by-character typing failed: {char_err}")
@@ -1205,6 +1024,340 @@ class SystemActions:
             
         except Exception as e:
             logger.error(f"Failed to type text: {e}")
+            return False
+            
+    def _type_text_unicode_batch(self, text, batch_size=5, char_delay=0.01):
+        """Type Unicode text using batched SendInput for better performance"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            # Define constants for SendInput
+            KEYEVENTF_UNICODE = 0x0004
+            KEYEVENTF_KEYUP = 0x0002
+            INPUT_KEYBOARD = 1
+            
+            # Define the input structure
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk", wintypes.WORD),
+                    ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+                ]
+            
+            class INPUT_union(ctypes.Union):
+                _fields_ = [
+                    ("ki", KEYBDINPUT),
+                    ("padding", ctypes.c_byte * 32)  # Ensure the union is large enough
+                ]
+            
+            class INPUT(ctypes.Structure):
+                _fields_ = [
+                    ("type", wintypes.DWORD),
+                    ("union", INPUT_union)
+                ]
+            
+            # Process characters in batches
+            i = 0
+            total_chars = len(text)
+            success = True
+            
+            while i < total_chars:
+                # Determine batch size (handle the last batch correctly)
+                end_idx = min(i + batch_size, total_chars)
+                current_batch = text[i:end_idx]
+                batch_len = len(current_batch)
+                
+                # Create an array of inputs (2 inputs per character - down and up)
+                inputs = (INPUT * (batch_len * 2))()
+                
+                # Fill the array with key events for each character
+                for j, char in enumerate(current_batch):
+                    char_code = ord(char)
+                    
+                    # Key down
+                    inputs[j*2].type = INPUT_KEYBOARD
+                    inputs[j*2].union.ki.wVk = 0  # We're using Unicode, so virtual key is 0
+                    inputs[j*2].union.ki.wScan = char_code
+                    inputs[j*2].union.ki.dwFlags = KEYEVENTF_UNICODE
+                    inputs[j*2].union.ki.time = 0
+                    inputs[j*2].union.ki.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
+                    
+                    # Key up
+                    inputs[j*2+1].type = INPUT_KEYBOARD
+                    inputs[j*2+1].union.ki.wVk = 0
+                    inputs[j*2+1].union.ki.wScan = char_code
+                    inputs[j*2+1].union.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+                    inputs[j*2+1].union.ki.time = 0
+                    inputs[j*2+1].union.ki.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
+                
+                # Send the batch of inputs
+                result = ctypes.windll.user32.SendInput(batch_len * 2, ctypes.pointer(inputs), ctypes.sizeof(INPUT))
+                
+                # Check if all inputs were sent successfully
+                if result != batch_len * 2:
+                    logger.warning(f"Failed to send all characters in batch {i//batch_size + 1}")
+                    success = False
+                
+                # Small delay between batches
+                time.sleep(char_delay)
+                
+                # Move to next batch
+                i = end_idx
+            
+            logger.info(f"Sent {total_chars} characters using batched Unicode SendInput")
+            return success
+            
+        except Exception as e:
+            logger.warning(f"Unicode batch typing failed: {e}")
+            return False
+    
+    def _paste_text_via_clipboard(self, text):
+        """Paste text using Windows clipboard API with ctypes (no pywin32)"""
+        try:
+            import ctypes
+            
+            # Define constants
+            CF_UNICODETEXT = 13
+            GMEM_MOVEABLE = 0x0002
+            
+            # Make clipboard operations atomic and ensure cleanup
+            original_clipboard_data = None
+            h_global = None
+            clipboard_open = False
+            
+            try:
+                # Open clipboard with limited retries
+                for retry in range(3):
+                    if ctypes.windll.user32.OpenClipboard(0):
+                        clipboard_open = True
+                        break
+                    time.sleep(0.1)
+                
+                if not clipboard_open:
+                    logger.warning("Failed to open clipboard after retries")
+                    return False
+                
+                # Save original clipboard content
+                original_clipboard_handle = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT) if ctypes.windll.user32.IsClipboardFormatAvailable(CF_UNICODETEXT) else None
+                
+                if original_clipboard_handle:
+                    clipboard_data_ptr = ctypes.windll.kernel32.GlobalLock(original_clipboard_handle)
+                    if clipboard_data_ptr:
+                        original_clipboard_data = ctypes.wstring_at(clipboard_data_ptr)
+                        ctypes.windll.kernel32.GlobalUnlock(original_clipboard_handle)
+                
+                # Clear clipboard
+                ctypes.windll.user32.EmptyClipboard()
+                
+                # Allocate global memory for the new clipboard content
+                text_length = len(text) + 1  # +1 for null terminator
+                h_global = ctypes.windll.kernel32.GlobalAlloc(GMEM_MOVEABLE, text_length * 2)  # *2 for wide chars
+                
+                if h_global:
+                    # Lock the memory to get a pointer
+                    lp_text = ctypes.windll.kernel32.GlobalLock(h_global)
+                    if lp_text:
+                        # Copy the text to the allocated memory
+                        ctypes.cdll.msvcrt.wcscpy(ctypes.c_wchar_p(lp_text), text)
+                        ctypes.windll.kernel32.GlobalUnlock(h_global)
+                        
+                        # Set the clipboard data
+                        if ctypes.windll.user32.SetClipboardData(CF_UNICODETEXT, h_global):
+                            logger.info("Set clipboard data successfully")
+                            # h_global ownership transferred to system, don't free it
+                            h_global = None
+                        else:
+                            logger.error("Failed to set clipboard data")
+                
+                # We MUST close the clipboard before continuing
+                ctypes.windll.user32.CloseClipboard()
+                clipboard_open = False
+                
+                # Short delay for clipboard to register
+                time.sleep(0.1)
+                
+                # Paste the content with keyboard shortcut
+                result = self._send_paste_keystroke()
+                
+                # After pasting, restore the original clipboard in a new operation
+                if original_clipboard_data:
+                    self._restore_clipboard_content(original_clipboard_data)
+                
+                return result
+                
+            finally:
+                # Safety cleanup - ensure clipboard is closed and memory freed
+                if clipboard_open:
+                    ctypes.windll.user32.CloseClipboard()
+                
+                if h_global:
+                    ctypes.windll.kernel32.GlobalFree(h_global)
+            
+        except Exception as e:
+            logger.warning(f"Windows clipboard method failed: {e}")
+            return False
+    
+    def _restore_clipboard_content(self, content):
+        """Safely restore clipboard content without interfering with system clipboard"""
+        if not content:
+            return
+            
+        import ctypes
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+        h_global = None
+        clipboard_open = False
+        
+        try:
+            # Wait before attempting to modify clipboard again
+            time.sleep(0.1)
+            
+            # Open clipboard with retries
+            for retry in range(3):
+                if ctypes.windll.user32.OpenClipboard(0):
+                    clipboard_open = True
+                    break
+                time.sleep(0.1)
+            
+            if not clipboard_open:
+                logger.warning("Failed to open clipboard for restoration")
+                return
+            
+            ctypes.windll.user32.EmptyClipboard()
+            
+            # Allocate memory for the original content
+            text_length = len(content) + 1  # +1 for null terminator
+            h_global = ctypes.windll.kernel32.GlobalAlloc(GMEM_MOVEABLE, text_length * 2)  # *2 for wide chars
+            
+            if h_global:
+                lp_text = ctypes.windll.kernel32.GlobalLock(h_global)
+                if lp_text:
+                    ctypes.cdll.msvcrt.wcscpy(ctypes.c_wchar_p(lp_text), content)
+                    ctypes.windll.kernel32.GlobalUnlock(h_global)
+                    
+                    if ctypes.windll.user32.SetClipboardData(CF_UNICODETEXT, h_global):
+                        # Ownership transferred to system
+                        h_global = None
+            
+            # Close clipboard before continuing
+            ctypes.windll.user32.CloseClipboard()
+            clipboard_open = False
+            logger.debug("Restored original clipboard content")
+            
+        except Exception as e:
+            logger.warning(f"Error restoring clipboard: {e}")
+        finally:
+            # Ensure cleanup
+            if clipboard_open:
+                ctypes.windll.user32.CloseClipboard()
+            
+            if h_global:
+                ctypes.windll.kernel32.GlobalFree(h_global)
+    
+    def _send_paste_keystroke(self):
+        """Send Ctrl+V keystroke to paste clipboard content"""
+        try:
+            import ctypes
+            
+            # Define constants
+            KEYEVENTF_KEYDOWN = 0x0000
+            KEYEVENTF_KEYUP = 0x0002
+            VK_CONTROL = 0x11
+            VK_V = 0x56
+            
+            # Send Ctrl+V keystrokes
+            ctypes.windll.user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYDOWN, 0)  # Ctrl down
+            time.sleep(0.03)
+            ctypes.windll.user32.keybd_event(VK_V, 0, KEYEVENTF_KEYDOWN, 0)  # V down
+            time.sleep(0.03)
+            ctypes.windll.user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)  # V up
+            time.sleep(0.03)
+            ctypes.windll.user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)  # Ctrl up
+            
+            # Give some time for paste to complete
+            time.sleep(0.1)
+            return True
+        except Exception as e:
+            logger.warning(f"Error sending paste keystroke: {e}")
+            return False
+    
+    def _paste_text_via_pyperclip(self, text):
+        """Paste text using pyperclip (cross-platform)"""
+        try:
+            # Don't interfere with clipboard if pyperclip not available
+            if not PYPERCLIP_AVAILABLE:
+                return False
+                
+            # Save original clipboard content with retry mechanism
+            original_clipboard = ""
+            retry_count = 0
+            max_retries = 3
+            
+            while retry_count < max_retries:
+                try:
+                    original_clipboard = pyperclip.paste()
+                    break
+                except Exception as clip_err:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        logger.warning(f"Failed to get original clipboard after {max_retries} attempts")
+                    time.sleep(0.1)
+            
+            # Copy text to clipboard with retry
+            retry_count = 0
+            copy_success = False
+            
+            while retry_count < max_retries and not copy_success:
+                try:
+                    pyperclip.copy(text)
+                    time.sleep(0.1)  # Short wait for clipboard
+                    copy_success = True
+                except Exception as copy_err:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        logger.warning(f"Failed to copy to clipboard after {max_retries} attempts")
+                    time.sleep(0.1)
+            
+            if not copy_success:
+                return False
+            
+            # Try paste operation
+            paste_success = False
+            try:
+                # Use direct pyautogui hotkey method
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.1)
+                paste_success = True
+            except Exception as paste_err:
+                logger.warning(f"Paste operation failed: {paste_err}")
+            
+            # Restore original clipboard with retry
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    # Add delay before restoration
+                    time.sleep(0.1)
+                    pyperclip.copy(original_clipboard)
+                    break
+                except Exception as restore_err:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        logger.warning(f"Failed to restore clipboard after {max_retries} attempts")
+                    time.sleep(0.1)
+            
+            return paste_success
+                
+        except Exception as clip_err:
+            logger.warning(f"Clipboard method failed: {clip_err}")
+            # Try one final time to restore clipboard in case of error
+            try:
+                if PYPERCLIP_AVAILABLE and original_clipboard:
+                    pyperclip.copy(original_clipboard)
+            except:
+                pass
             return False
 
     def run_command(self, params):

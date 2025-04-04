@@ -2854,18 +2854,25 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             header_layout.addStretch()
             text_layout.addLayout(header_layout)
             
-            # Text input
-            input_layout = QtWidgets.QHBoxLayout()
+            # Text input label
             text_label = QtWidgets.QLabel("Text to Type:")
             text_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            text_layout.addWidget(text_label)
             
-            self.form_widgets["text"] = QtWidgets.QLineEdit(existing_data.get("text", ""))
-            self.form_widgets["text"].setStyleSheet(LINEEDIT_STYLE)
+            # Replace QLineEdit with QTextEdit for a larger text input area
+            self.form_widgets["text"] = QtWidgets.QTextEdit()
+            self.form_widgets["text"].setText(existing_data.get("text", ""))
+            self.form_widgets["text"].setStyleSheet(f"""
+                background-color: #333333;
+                color: {TEXT_COLOR};
+                border: 1px solid #555555;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 13px;
+            """)
             self.form_widgets["text"].setPlaceholderText("Enter text to be typed")
-            
-            input_layout.addWidget(text_label)
-            input_layout.addWidget(self.form_widgets["text"])
-            text_layout.addLayout(input_layout)
+            self.form_widgets["text"].setMinimumHeight(100)  # Set a taller height
+            text_layout.addWidget(self.form_widgets["text"])
             
             # Description
             desc_label = QtWidgets.QLabel("This text will be typed automatically when the button is pressed")
@@ -3117,7 +3124,13 @@ class ButtonConfigDialog(QtWidgets.QDialog):
                     commands.append({"command": cmd, "delay_ms": int(delay) if delay.isdigit() else 0})
             action_data["commands"] = commands
         elif action_type == "text":
-            action_data["text"] = self.form_widgets.get("text", QtWidgets.QLineEdit()).text()
+            # Get text from QTextEdit instead of QLineEdit
+            text_widget = self.form_widgets.get("text")
+            if isinstance(text_widget, QtWidgets.QTextEdit):
+                action_data["text"] = text_widget.toPlainText()
+            else:
+                # Fallback for backward compatibility
+                action_data["text"] = getattr(text_widget, 'text', lambda: '')()
         elif action_type == "speech_to_text":
             action_data["language"] = self.language_map.get(self.form_widgets.get("language", QtWidgets.QComboBox()).currentText(), "en-US")
         elif action_type == "ask_chatgpt":
