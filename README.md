@@ -3,7 +3,7 @@
 >
 Adds multifunctional controls in Windows 10/11 to your favorite WORLDE EASYPAD.12
 ![image](https://github.com/user-attachments/assets/3454a86c-b0e0-4f52-baf0-794052dd0bd3)
-![image](https://github.com/user-attachments/assets/0f775e4a-8221-4d4c-8c4f-9b240f9e4a79)
+![image](https://github.com/user-attachments/assets/baefc1e3-d5e4-40fe-ab67-764e51803cb9)
 ![image](https://github.com/user-attachments/assets/3caf32cc-554a-4612-846a-9d830203da49)
 
 ## Features
@@ -20,7 +20,8 @@ Adds multifunctional controls in Windows 10/11 to your favorite WORLDE EASYPAD.1
   - Run system commands
   - Media controls (play/pause, next/previous track, volume)
   - Speech to text (Google speech recognition, multilangual, hold button for it)
-  - Ask ChatGPT, ask and receive answer from ChatGPT to any textfield (Uses online Whisper and reqires OpenAI API) 
+  - Ask ChatGPT, ask and receive answer from ChatGPT to any textfield (Uses online Whisper and reqires OpenAI API)
+  - Text to speech (yandex, use Russian model only, Zahar and Jane are the best, russian accent reading English text)
 - Customizable notifications
 - Beautiful dark-themed UI with teal and pink accents
 - Save and load your button configurations
