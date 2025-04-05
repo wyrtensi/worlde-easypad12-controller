@@ -2343,7 +2343,8 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             'powershell': "🔷",
             'text': "📝",
             'speech_to_text': "🎤",
-            'ask_chatgpt': "🤖"
+            'ask_chatgpt': "🤖",
+            'text_to_speech': "🔊"
         }
         
         # Create a grid of action type buttons
@@ -3095,54 +3096,275 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             
             self.action_form_layout.addWidget(chatgpt_frame)
                       
+        elif action_type == "text_to_speech":
+            # Import the TTS manager to check its availability
+            from app.text_to_speech import tts_manager, YANDEX_TTS_AVAILABLE
+            
+            tts_frame = QtWidgets.QFrame()
+            tts_frame.setStyleSheet("background-color: #252525; border-radius: 6px; padding: 10px;")
+            tts_layout = QtWidgets.QVBoxLayout(tts_frame)
+            tts_layout.setSpacing(10)
+            
+            # Header with icon
+            header_layout = QtWidgets.QHBoxLayout()
+            header_icon = QtWidgets.QLabel("🔊")
+            header_icon.setStyleSheet("font-size: 16px;")
+            header_text = QtWidgets.QLabel("Text to Speech")
+            header_text.setStyleSheet("font-weight: bold; color: #CCCCCC;")
+            header_layout.addWidget(header_icon)
+            header_layout.addWidget(header_text)
+            header_layout.addStretch()
+            tts_layout.addLayout(header_layout)
+            
+            if YANDEX_TTS_AVAILABLE:
+                # Language selection
+                language_layout = QtWidgets.QHBoxLayout()
+                language_label = QtWidgets.QLabel("Language:")
+                language_label.setMinimumWidth(100)
+                language_label.setStyleSheet(f"color: {TEXT_COLOR};")
+                
+                self.form_widgets["language"] = QtWidgets.QComboBox()
+                self.form_widgets["language"].setStyleSheet(COMBOBOX_STYLE)
+                
+                # Add languages from TTS manager
+                languages = tts_manager.get_language_list()
+                for code, name in languages.items():
+                    self.form_widgets["language"].addItem(name, code)
+                
+                # Set current language
+                current_language = existing_data.get("language", "auto")
+                for i in range(self.form_widgets["language"].count()):
+                    if self.form_widgets["language"].itemData(i) == current_language:
+                        self.form_widgets["language"].setCurrentIndex(i)
+                        break
+                
+                language_layout.addWidget(language_label)
+                language_layout.addWidget(self.form_widgets["language"])
+                tts_layout.addLayout(language_layout)
+                
+                # Voice selection (depends on language)
+                voice_layout = QtWidgets.QHBoxLayout()
+                voice_label = QtWidgets.QLabel("Voice:")
+                voice_label.setMinimumWidth(100)
+                voice_label.setStyleSheet(f"color: {TEXT_COLOR};")
+                
+                self.form_widgets["voice"] = QtWidgets.QComboBox()
+                self.form_widgets["voice"].setStyleSheet(COMBOBOX_STYLE)
+                
+                # Update voice options when language changes
+                def update_voices():
+                    lang_code = self.form_widgets["language"].currentData()
+                    self.form_widgets["voice"].clear()
+                    voices = tts_manager.get_voice_list(lang_code)
+                    for code, name in voices.items():
+                        self.form_widgets["voice"].addItem(name, code)
+                    
+                    # Try to restore previous voice selection
+                    current_voice = existing_data.get("voice", "auto")
+                    for i in range(self.form_widgets["voice"].count()):
+                        if self.form_widgets["voice"].itemData(i) == current_voice:
+                            self.form_widgets["voice"].setCurrentIndex(i)
+                            break
+                
+                # Connect language change to voice update
+                self.form_widgets["language"].currentIndexChanged.connect(update_voices)
+                
+                # Initialize voices
+                update_voices()
+                
+                voice_layout.addWidget(voice_label)
+                voice_layout.addWidget(self.form_widgets["voice"])
+                tts_layout.addLayout(voice_layout)
+                
+                # Voice mood
+                mood_layout = QtWidgets.QHBoxLayout()
+                mood_label = QtWidgets.QLabel("Voice Mood:")
+                mood_label.setMinimumWidth(100)
+                mood_label.setStyleSheet(f"color: {TEXT_COLOR};")
+                
+                self.form_widgets["mood"] = QtWidgets.QComboBox()
+                self.form_widgets["mood"].setStyleSheet(COMBOBOX_STYLE)
+                
+                # Add moods
+                moods = tts_manager.get_mood_list()
+                for code, name in moods.items():
+                    self.form_widgets["mood"].addItem(name, code)
+                
+                # Set current mood
+                current_mood = existing_data.get("mood", "neutral")
+                for i in range(self.form_widgets["mood"].count()):
+                    if self.form_widgets["mood"].itemData(i) == current_mood:
+                        self.form_widgets["mood"].setCurrentIndex(i)
+                        break
+                
+                mood_layout.addWidget(mood_label)
+                mood_layout.addWidget(self.form_widgets["mood"])
+                tts_layout.addLayout(mood_layout)
+                
+                # Audio frequency
+                freq_layout = QtWidgets.QHBoxLayout()
+                freq_label = QtWidgets.QLabel("Audio Quality:")
+                freq_label.setMinimumWidth(100)
+                freq_label.setStyleSheet(f"color: {TEXT_COLOR};")
+                
+                self.form_widgets["frequency"] = QtWidgets.QComboBox()
+                self.form_widgets["frequency"].setStyleSheet(COMBOBOX_STYLE)
+                
+                # Add frequencies
+                frequencies = tts_manager.get_frequency_list()
+                for code, name in frequencies.items():
+                    self.form_widgets["frequency"].addItem(name, code)
+                
+                # Set current frequency
+                current_freq = existing_data.get("frequency", "24000")
+                for i in range(self.form_widgets["frequency"].count()):
+                    if self.form_widgets["frequency"].itemData(i) == current_freq:
+                        self.form_widgets["frequency"].setCurrentIndex(i)
+                        break
+                
+                freq_layout.addWidget(freq_label)
+                freq_layout.addWidget(self.form_widgets["frequency"])
+                tts_layout.addLayout(freq_layout)
+                
+                # Text source
+                source_layout = QtWidgets.QHBoxLayout()
+                source_label = QtWidgets.QLabel("Text Source:")
+                source_label.setMinimumWidth(100)
+                source_label.setStyleSheet(f"color: {TEXT_COLOR};")
+                
+                self.form_widgets["text_source"] = QtWidgets.QComboBox()
+                self.form_widgets["text_source"].setStyleSheet(COMBOBOX_STYLE)
+                self.form_widgets["text_source"].addItem("Clipboard", "clipboard")
+                self.form_widgets["text_source"].addItem("Selection (auto-copy)", "selection")
+                # could add more sources in the future
+                
+                # Set current source
+                current_source = existing_data.get("text_source", "clipboard")
+                for i in range(self.form_widgets["text_source"].count()):
+                    if self.form_widgets["text_source"].itemData(i) == current_source:
+                        self.form_widgets["text_source"].setCurrentIndex(i)
+                        break
+                
+                source_layout.addWidget(source_label)
+                source_layout.addWidget(self.form_widgets["text_source"])
+                tts_layout.addLayout(source_layout)
+                
+                # Instructions
+                help_label = QtWidgets.QLabel(
+                    "When button is pressed, the text will be spoken using "
+                    "the Yandex Text-to-Speech engine. You can choose between two text sources:\n"
+                    "- Clipboard: uses text that's already in your clipboard\n"
+                    "- Selection: automatically copies currently selected text first"
+                )
+                help_label.setWordWrap(True)
+                help_label.setStyleSheet("color: #888888; font-style: italic; font-size: 12px;")
+                tts_layout.addWidget(help_label)
+                
+            else:
+                # Show error if TTS not available
+                error_label = QtWidgets.QLabel(
+                    "The Yandex Text-to-Speech engine is not available. "
+                    "Please install it with 'pip install yandex-tts-free'."
+                )
+                error_label.setWordWrap(True)
+                error_label.setStyleSheet("color: #ff6666; font-style: italic;")
+                tts_layout.addWidget(error_label)
+            
+            self.action_form_layout.addWidget(tts_frame)
+        
+        # Add default message for unknown action types
+        else:
+            logger.warning(f"Unknown action type: {action_type}")
+            self.message_signal.emit(f"Unknown action type: {action_type}")
+        
         # Add stretch to ensure everything aligns to the top
         self.action_form_layout.addStretch()
 
     def get_action_data(self):
+        """Get action data from the form based on selected action type"""
         action_type = self.action_type_combo.currentData()
         action_data = {}
-        
-        if action_type in ["app", "toggle_app"]:
-            action_data["path"] = self.form_widgets.get("path", QtWidgets.QLineEdit()).text()
-            action_data["args"] = self.form_widgets.get("args", QtWidgets.QLineEdit()).text()
+        if action_type == "app" or action_type == "toggle_app":
+            return {
+                "path": self.form_widgets.get("path", QtWidgets.QLineEdit()).text(),
+                "args": self.form_widgets.get("args", QtWidgets.QLineEdit()).text(),
+            }
+            
         elif action_type == "web":
-            action_data["url"] = self.form_widgets.get("url", QtWidgets.QLineEdit()).text()
+            return {
+                "url": self.form_widgets.get("url", QtWidgets.QLineEdit()).text(),
+            }
+            
         elif action_type == "volume":
-            action_data["action"] = self.form_widgets.get("action", QtWidgets.QComboBox()).currentText()
+            return {
+                "action": self.form_widgets.get("action", QtWidgets.QComboBox()).currentText(),
+                "value": None,  # Value will be set when used with a slider
+            }
+            
         elif action_type == "media":
-            action_data["control"] = self.media_map.get(self.form_widgets.get("media", QtWidgets.QComboBox()).currentText(), "play_pause")
+            media_display = self.form_widgets.get("media", QtWidgets.QComboBox()).currentText()
+            return {
+                "control": self.media_map.get(media_display, "play_pause"),
+            }
+            
         elif action_type == "shortcut":
-            action_data["shortcut"] = self.form_widgets.get("shortcut", QtWidgets.QLineEdit()).text()
+            return {
+                "shortcut": self.form_widgets.get("shortcut", QtWidgets.QLineEdit()).text(),
+            }
+            
         elif action_type == "audio_device":
-            action_data["device_name"] = self.form_widgets.get("device_name", QtWidgets.QLineEdit()).text()
-        elif action_type in ["command", "powershell"]:
+            return {
+                "device_name": self.form_widgets.get("device_name", QtWidgets.QLineEdit()).text(),
+            }
+            
+        elif action_type == "text":
+            return {
+                "text": self.form_widgets.get("text", QtWidgets.QTextEdit()).toPlainText(),
+            }
+            
+        elif action_type == "command" or action_type == "powershell":
             commands = []
             for i in range(3):
-                cmd = self.form_widgets.get(f"command_{i}", QtWidgets.QLineEdit()).text()
-                delay = self.form_widgets.get(f"delay_{i}", QtWidgets.QLineEdit()).text()
-                if cmd:
-                    commands.append({"command": cmd, "delay_ms": int(delay) if delay.isdigit() else 0})
-            action_data["commands"] = commands
-        elif action_type == "text":
-            # Get text from QTextEdit instead of QLineEdit
-            text_widget = self.form_widgets.get("text")
-            if isinstance(text_widget, QtWidgets.QTextEdit):
-                action_data["text"] = text_widget.toPlainText()
-            else:
-                # Fallback for backward compatibility
-                action_data["text"] = getattr(text_widget, 'text', lambda: '')()
+                command = self.form_widgets.get(f"command_{i}", QtWidgets.QLineEdit()).text()
+                if command:
+                    try:
+                        delay = int(self.form_widgets.get(f"delay_{i}", QtWidgets.QLineEdit()).text() or "0")
+                    except ValueError:
+                        delay = 0
+                        
+                    commands.append({
+                        "command": command,
+                        "delay_ms": delay
+                    })
+            return {
+                "commands": commands,
+            }
+            
         elif action_type == "speech_to_text":
-            action_data["language"] = self.language_map.get(self.form_widgets.get("language", QtWidgets.QComboBox()).currentText(), "en-US")
+            language_display = self.form_widgets.get("language", QtWidgets.QComboBox()).currentText()
+            return {
+                "language": self.language_map.get(language_display, "en-US"),
+            }
+            
         elif action_type == "ask_chatgpt":
-            action_data["api_key"] = self.form_widgets.get("api_key", QtWidgets.QLineEdit()).text()
-            model_combobox = self.form_widgets.get("model", QtWidgets.QComboBox())
-            model_index = model_combobox.currentIndex()
-            action_data["model"] = model_combobox.itemData(model_index)
-            action_data["language"] = self.language_map_chatgpt.get(self.form_widgets.get("language_chatgpt", QtWidgets.QComboBox()).currentText(), "en-US")
-            action_data["system_prompt"] = self.form_widgets.get("system_prompt", QtWidgets.QTextEdit()).toPlainText()
+                action_data["api_key"] = self.form_widgets.get("api_key", QtWidgets.QLineEdit()).text()
+                model_combobox = self.form_widgets.get("model", QtWidgets.QComboBox())
+                model_index = model_combobox.currentIndex()
+                action_data["model"] = model_combobox.itemData(model_index)
+                action_data["language"] = self.language_map_chatgpt.get(self.form_widgets.get("language_chatgpt", QtWidgets.QComboBox()).currentText(), "en-US")
+                action_data["system_prompt"] = self.form_widgets.get("system_prompt", QtWidgets.QTextEdit()).toPlainText()
+            
+        elif action_type == "text_to_speech":
+            return {
+                "language": self.form_widgets.get("language", QtWidgets.QComboBox()).currentData(),
+                "voice": self.form_widgets.get("voice", QtWidgets.QComboBox()).currentData(),
+                "mood": self.form_widgets.get("mood", QtWidgets.QComboBox()).currentData(),
+                "frequency": self.form_widgets.get("frequency", QtWidgets.QComboBox()).currentData(),
+                "text_source": self.form_widgets.get("text_source", QtWidgets.QComboBox()).currentData(),
+            }
         
-        
-        return action_data
+        # Default - empty data
+        return {}
 
     def browse_file(self, entry):
         file_path = QtWidgets.QFileDialog.getOpenFileName(self, "Select Application", "", "Executable files (*.exe);;All files (*.*);;Shortcut files (*.lnk)")[0]

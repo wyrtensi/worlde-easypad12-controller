@@ -874,6 +874,9 @@ class SystemActions:
                 ).start()
                 return True
 
+            elif action_type == "text_to_speech":
+                return self.text_to_speech(action_params)
+
             else:
                 logger.error(f"Unknown action type: {action_type}")
                 return False
@@ -1554,6 +1557,45 @@ class SystemActions:
                     logger.error(
                         f"Failed to execute PowerShell command '{command}': {e}"
                     )
+
+    def text_to_speech(self, params):
+        """Play text-to-speech for selected text from clipboard"""
+        try:
+            logger.info("Text-to-speech action triggered")
+            
+            # Get parameters with defaults
+            language = params.get("language", "auto")
+            voice = params.get("voice", "auto")
+            mood = params.get("mood", "neutral")
+            frequency = params.get("frequency", "24000")
+            text_source = params.get("text_source", "clipboard")
+            
+            # Create configuration
+            tts_config = {
+                "language": language,
+                "voice": voice,
+                "mood": mood,
+                "frequency": frequency,
+                "text_source": text_source
+            }
+            
+            # Import the TTS manager here to avoid circular imports
+            from app.text_to_speech import tts_manager
+            
+            # Play the text using the TTS manager
+            result = tts_manager.play_text(tts_config)
+            
+            if result:
+                self.notify("tts", "Text-to-speech playback started")
+                return True
+            else:
+                self.notify("tts_error", "Failed to start text-to-speech playback")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error in text-to-speech action: {e}")
+            self.notify("tts_error", f"Text-to-speech error: {str(e)}")
+            return False
 
 
 def execute_shortcut(shortcut: str):

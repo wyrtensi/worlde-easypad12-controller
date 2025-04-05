@@ -21,3 +21,6 @@ qasync
 pydub
 wave
 openai
+yandex_tts_free
+requests
+ffmpeg-python
