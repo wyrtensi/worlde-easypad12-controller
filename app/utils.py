@@ -214,6 +214,14 @@ def get_action_types():
         "text_to_speech": {
             "name": "Text to Speech",
             "description": "Read selected text aloud using text-to-speech."
+        },
+        "wake_on_lan": {
+            "name": "Wake On LAN",
+            "description": "Send a Wake-on-LAN magic packet to wake up a device on the network."
+        },
+        "webos_tv": {
+            "name": "WebOS TV Control",
+            "description": "Control LG TV with WebOS, send remote commands, launch apps, and more."
         }
     }
 

@@ -20,6 +20,17 @@ import threading
 import importlib.util
 from typing import Optional
 import psutil
+import socket
+import struct
+import re
+import asyncio
+
+# Import WebOS TV Manager
+try:
+    from app.webos_tv import webos_manager
+    WEBOS_AVAILABLE = True
+except ImportError:
+    WEBOS_AVAILABLE = False
 
 try:
     import pyautogui
@@ -876,6 +887,12 @@ class SystemActions:
 
             elif action_type == "text_to_speech":
                 return self.text_to_speech(action_params)
+                
+            elif action_type == "wake_on_lan":
+                return self.wake_on_lan(action_params)
+                
+            elif action_type == "webos_tv":
+                return self.control_webos_tv(action_params)
 
             else:
                 logger.error(f"Unknown action type: {action_type}")
@@ -1595,6 +1612,199 @@ class SystemActions:
         except Exception as e:
             logger.error(f"Error in text-to-speech action: {e}")
             self.notify("tts_error", f"Text-to-speech error: {str(e)}")
+            return False
+
+    def wake_on_lan(self, params):
+        """
+        Send a Wake-on-LAN magic packet to one or more MAC addresses
+        
+        Args:
+            params (dict): Parameters containing:
+                - mac_address (str): MAC address of the device to wake up
+                - ip_address (str, optional): IP address to send to (default: 255.255.255.255)
+                - port (int, optional): UDP port to use (default: 9)
+        
+        Returns:
+            bool: True if the packet was sent successfully, False otherwise
+        """
+        try:
+            # Get parameters
+            mac_address = params.get("mac_address", "")
+            ip_address = params.get("ip_address", "255.255.255.255")  # Default to broadcast
+            port = params.get("port", 9)  # Default WoL port if not specified
+            
+            if not mac_address:
+                logger.error("No MAC address specified for Wake-on-LAN")
+                self.notify("error", "No MAC address specified for Wake-on-LAN")
+                return False
+                
+            # Split by commas if multiple MAC addresses are provided
+            mac_addresses = [addr.strip() for addr in mac_address.split(",") if addr.strip()]
+            
+            if not mac_addresses:
+                logger.error("No valid MAC addresses found")
+                self.notify("error", "No valid MAC addresses found")
+                return False
+                
+            success = False
+            valid_macs = []
+            invalid_macs = []
+            
+            # Process each MAC address
+            for mac in mac_addresses:
+                # Validate MAC address format
+                mac_pattern = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$')
+                if not mac_pattern.match(mac):
+                    logger.warning(f"Invalid MAC address format: {mac}")
+                    invalid_macs.append(mac)
+                    continue
+                    
+                valid_macs.append(mac)
+                
+                # Convert MAC address to bytes
+                mac_bytes = bytearray.fromhex(mac.replace(":", "").replace("-", ""))
+                
+                # Create magic packet (6 bytes of 0xFF followed by MAC address repeated 16 times)
+                magic_packet = b'\xff' * 6 + mac_bytes * 16
+                
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                        s.sendto(magic_packet, (ip_address, port))
+                    logger.info(f"Wake-on-LAN packet sent to {mac} (via {ip_address}:{port})")
+                    success = True
+                except Exception as e:
+                    logger.error(f"Failed to send WoL packet to {mac}: {e}")
+            
+            # Build notification message
+            if success:
+                if len(valid_macs) == 1:
+                    self.notify("wol", f"Wake-on-LAN packet sent to {valid_macs[0]}")
+                else:
+                    self.notify("wol", f"Wake-on-LAN packets sent to {len(valid_macs)} devices")
+                    
+                if invalid_macs:
+                    logger.warning(f"Could not send to {len(invalid_macs)} invalid MAC addresses")
+                    
+                return True
+            else:
+                self.notify("error", "Failed to send any Wake-on-LAN packets")
+                return False
+            
+        except Exception as e:
+            error_msg = f"Error sending Wake-on-LAN packet: {e}"
+            logger.error(error_msg)
+            self.notify("error", error_msg)
+            return False
+
+    def control_webos_tv(self, params):
+        """
+        Control an LG WebOS TV device
+        
+        Args:
+            params (dict): Parameters containing:
+                - ip (str): IP address of the TV
+                - command (str): Command to send to the TV
+                - connect_only (bool, optional): Only connect without sending command
+        
+        Returns:
+            bool: True if the command was sent successfully, False otherwise
+        """
+        try:
+            if not WEBOS_AVAILABLE:
+                logger.error("WebOS TV module is not available. Install aiowebostv with 'pip install aiowebostv'")
+                self.notify("error", "WebOS TV module is not available")
+                return False
+                
+            # Get parameters
+            ip = params.get("ip", "")
+            command = params.get("command", "")
+            connect_only = params.get("connect_only", False)
+            
+            if not ip:
+                logger.error("No IP address specified for WebOS TV control")
+                self.notify("error", "No IP address specified for TV")
+                return False
+                
+            # Create a new asyncio event loop in a separate thread for async operations
+            result_event = threading.Event()
+            result_container = {"success": False, "message": ""}
+            
+            def run_async_operation():
+                async def async_operation():
+                    try:
+                        # Force a reconnection for each operation - more reliable than reusing connections
+                        success = await webos_manager.force_reconnect(ip)
+                        
+                        if not success:
+                            result_container["message"] = f"Failed to connect to TV at {ip}"
+                            return False
+                        
+                        # If only connecting, we're done
+                        if connect_only:
+                            tv_name = webos_manager.config.get(ip, {}).get("name", f"LG TV ({ip})")
+                            result_container["message"] = f"Connected to {tv_name}"
+                            result_container["success"] = True
+                            return True
+                        
+                        # Execute the command
+                        if not command:
+                            result_container["message"] = "No command specified"
+                            return False
+                        
+                        # Execute the command directly
+                        command_success = await webos_manager.execute_command(ip, command)
+                        
+                        if command_success:
+                            # Try to get a friendly command description
+                            cmd_desc = command
+                            for cmd_name, cmd_info in webos_manager.default_commands.items():
+                                if cmd_info["command"] == command:
+                                    cmd_desc = cmd_info["description"]
+                                    break
+                                
+                            result_container["message"] = f"Sent '{cmd_desc}' to TV"
+                            result_container["success"] = True
+                            return True
+                        else:
+                            result_container["message"] = f"Failed to send command '{command}' to TV"
+                            return False
+                    except Exception as e:
+                        logger.error(f"Error in WebOS TV control: {str(e)}")
+                        result_container["message"] = f"Error: {str(e)}"
+                        return False
+                    finally:
+                        result_event.set()
+                
+                # Create and run the event loop
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(async_operation())
+                finally:
+                    loop.close()
+            
+            # Start the thread and wait for completion with timeout
+            thread = threading.Thread(target=run_async_operation)
+            thread.start()
+            thread.join(timeout=10.0)  # Wait up to 10 seconds for the operation to complete
+            
+            if not result_event.is_set():
+                logger.warning("WebOS TV operation timed out")
+                self.notify("error", "TV operation timed out")
+                return False
+                
+            if result_container["success"]:
+                self.notify("webos_tv", result_container["message"])
+                return True
+            else:
+                self.notify("error", result_container["message"])
+                return False
+                
+        except Exception as e:
+            error_msg = f"Error controlling WebOS TV: {e}"
+            logger.error(error_msg)
+            self.notify("error", error_msg)
             return False
 
 

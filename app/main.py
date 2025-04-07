@@ -9,6 +9,7 @@ import platform
 import traceback
 import logging
 from PySide6 import QtWidgets, QtGui
+from PySide6.QtWidgets import QFontComboBox
 import PySide6.QtCore as QtCore
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QModelIndex
 import speech_recognition as sr
@@ -30,6 +31,13 @@ import wave
 import keyboard
 import subprocess
 import ctypes
+
+# Import WebOS TV Manager if available
+try:
+    from app.webos_tv import webos_manager
+    WEBOS_AVAILABLE = True
+except ImportError:
+    WEBOS_AVAILABLE = False
 
 # Try to import win32clipboard for direct clipboard access
 try:
@@ -627,6 +635,17 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
             return
         self._shutting_down = True
 
+        # Clean up WebOS TV connections first
+        try:
+            from app.webos_tv import webos_manager
+            if webos_manager and webos_manager.loop and not webos_manager.loop.is_closed():
+                logger.debug("Cleaning up WebOS TV connections")
+                asyncio.run_coroutine_threadsafe(webos_manager.cleanup(), webos_manager.loop)
+                # Give it a moment to disconnect
+                time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Error cleaning up WebOS TV connections: {e}")
+
         if self.tray_icon:
             try:
                 self.tray_icon.hide()
@@ -635,6 +654,7 @@ class MIDIKeyboardApp(QtWidgets.QMainWindow):
             except Exception as e:
                 logger.error(f"Error hiding tray icon: {e}")
 
+        # Rest of the cleanup code remains unchanged
         if hasattr(self, 'midi_controller') and self.midi_controller:
             try:
                 if self.midi_controller.is_connected:
@@ -2344,7 +2364,9 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             'text': "📝",
             'speech_to_text': "🎤",
             'ask_chatgpt': "🤖",
-            'text_to_speech': "🔊"
+            'text_to_speech': "🔊",
+            'wake_on_lan': "📡",
+            'webos_tv': "📺"
         }
         
         # Create a grid of action type buttons
@@ -3272,6 +3294,282 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             
             self.action_form_layout.addWidget(tts_frame)
         
+        elif action_type == "wake_on_lan":
+            # Create a styled frame for the Wake-on-LAN configuration
+            wol_frame = QtWidgets.QFrame()
+            wol_frame.setStyleSheet("background-color: #252525; border-radius: 6px; padding: 10px;")
+            wol_layout = QtWidgets.QVBoxLayout(wol_frame)
+            wol_layout.setSpacing(10)
+            
+            # Header with icon
+            header_layout = QtWidgets.QHBoxLayout()
+            header_icon = QtWidgets.QLabel("⚡")
+            header_icon.setStyleSheet("font-size: 16px;")
+            header_text = QtWidgets.QLabel("Wake On LAN")
+            header_text.setStyleSheet("font-weight: bold; color: #CCCCCC;")
+            header_layout.addWidget(header_icon)
+            header_layout.addWidget(header_text)
+            header_layout.addStretch()
+            wol_layout.addLayout(header_layout)
+            
+            # MAC Address field
+            mac_layout = QtWidgets.QHBoxLayout()
+            mac_label = QtWidgets.QLabel("MAC Address:")
+            mac_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["mac_address"] = QtWidgets.QLineEdit(existing_data.get("mac_address", ""))
+            self.form_widgets["mac_address"].setStyleSheet(LINEEDIT_STYLE)
+            self.form_widgets["mac_address"].setPlaceholderText("00:11:22:33:44:55")
+            self.form_widgets["mac_address"].setToolTip("MAC address of the device to wake up (e.g. 00:11:22:33:44:55)")
+            
+            mac_layout.addWidget(mac_label)
+            mac_layout.addWidget(self.form_widgets["mac_address"])
+            wol_layout.addLayout(mac_layout)
+            
+            # IP Address field (subnet broadcast)
+            ip_layout = QtWidgets.QHBoxLayout()
+            ip_label = QtWidgets.QLabel("IP Address:")
+            ip_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["ip_address"] = QtWidgets.QLineEdit(existing_data.get("ip_address", "255.255.255.255"))
+            self.form_widgets["ip_address"].setStyleSheet(LINEEDIT_STYLE)
+            self.form_widgets["ip_address"].setPlaceholderText("255.255.255.255")
+            self.form_widgets["ip_address"].setToolTip("IP address to send the packet to (default broadcast: 255.255.255.255)")
+            
+            ip_layout.addWidget(ip_label)
+            ip_layout.addWidget(self.form_widgets["ip_address"])
+            wol_layout.addLayout(ip_layout)
+            
+            # Port field (optional)
+            port_layout = QtWidgets.QHBoxLayout()
+            port_label = QtWidgets.QLabel("Port (Optional):")
+            port_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["port"] = QtWidgets.QLineEdit(str(existing_data.get("port", "")))
+            self.form_widgets["port"].setStyleSheet(LINEEDIT_STYLE)
+            self.form_widgets["port"].setPlaceholderText("Leave empty for default (9)")
+            self.form_widgets["port"].setToolTip("Optional: UDP port to send the magic packet (default: 9)")
+            self.form_widgets["port"].setMaximumWidth(200)
+            
+            port_layout.addWidget(port_label)
+            port_layout.addWidget(self.form_widgets["port"])
+            port_layout.addStretch()
+            wol_layout.addLayout(port_layout)
+            
+            # Help text
+            help_text = QtWidgets.QLabel(
+                "Wake On LAN sends a 'magic packet' to wake up a device on your network. "
+                "The target device must have Wake-on-LAN enabled in its BIOS/UEFI settings."
+            )
+            help_text.setStyleSheet("color: #888888; font-style: italic; font-size: 12px;")
+            help_text.setWordWrap(True)
+            wol_layout.addWidget(help_text)
+            
+            self.action_form_layout.addWidget(wol_frame)
+        
+        elif action_type == "webos_tv":
+            # Create a styled frame for the WebOS TV control configuration
+            webos_frame = QtWidgets.QFrame()
+            webos_frame.setStyleSheet("background-color: #252525; border-radius: 6px; padding: 10px;")
+            webos_layout = QtWidgets.QVBoxLayout(webos_frame)
+            webos_layout.setSpacing(10)
+            
+            # Header with icon
+            header_layout = QtWidgets.QHBoxLayout()
+            header_icon = QtWidgets.QLabel("📺")
+            header_icon.setStyleSheet("font-size: 16px;")
+            header_text = QtWidgets.QLabel("WebOS TV Control")
+            header_text.setStyleSheet("font-weight: bold; color: #CCCCCC;")
+            header_layout.addWidget(header_icon)
+            header_layout.addWidget(header_text)
+            header_layout.addStretch()
+            webos_layout.addLayout(header_layout)
+            
+            # IP Address field
+            ip_layout = QtWidgets.QHBoxLayout()
+            ip_label = QtWidgets.QLabel("TV IP Address:")
+            ip_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            # Get saved TVs if WebOS module is available
+            saved_tvs = {}
+            if WEBOS_AVAILABLE:
+                try:
+                    saved_tvs = webos_manager.get_known_tvs()
+                except Exception as e:
+                    logger.error(f"Error getting known TVs: {e}")
+            
+            # If we have saved TVs, show a dropdown with them
+            if saved_tvs:
+                self.form_widgets["ip"] = QtWidgets.QComboBox()
+                self.form_widgets["ip"].setStyleSheet(COMBOBOX_STYLE)
+                self.form_widgets["ip"].addItem("New TV...", "")
+                
+                # Add saved TVs to dropdown
+                selected_index = 0
+                selected_ip = existing_data.get("ip", "")
+                idx = 1
+                
+                for tv_ip, tv_name in saved_tvs.items():
+                    self.form_widgets["ip"].addItem(f"{tv_name} ({tv_ip})", tv_ip)
+                    if tv_ip == selected_ip:
+                        selected_index = idx
+                    idx += 1
+                
+                # Select the previously saved TV if it exists
+                self.form_widgets["ip"].setCurrentIndex(selected_index)
+                
+                # Add custom IP field that shows when "New TV..." is selected
+                custom_ip_layout = QtWidgets.QHBoxLayout()
+                self.form_widgets["custom_ip"] = QtWidgets.QLineEdit()
+                self.form_widgets["custom_ip"].setStyleSheet(LINEEDIT_STYLE)
+                self.form_widgets["custom_ip"].setPlaceholderText("192.168.1.x")
+                self.form_widgets["custom_ip"].setToolTip("IP address of your LG WebOS TV")
+                
+                if selected_index == 0:
+                    self.form_widgets["custom_ip"].setText(selected_ip)
+                
+                custom_ip_layout.addWidget(QtWidgets.QLabel("   "))  # Indent
+                custom_ip_layout.addWidget(self.form_widgets["custom_ip"])
+                
+                # Connect selection change to update custom IP visibility
+                def update_custom_ip_visibility():
+                    self.form_widgets["custom_ip"].setVisible(self.form_widgets["ip"].currentIndex() == 0)
+                
+                self.form_widgets["ip"].currentIndexChanged.connect(update_custom_ip_visibility)
+                # Set initial visibility
+                self.form_widgets["custom_ip"].setVisible(selected_index == 0)
+            else:
+                # Simple IP input field if no saved TVs
+                self.form_widgets["ip"] = QtWidgets.QLineEdit(existing_data.get("ip", ""))
+                self.form_widgets["ip"].setStyleSheet(LINEEDIT_STYLE)
+                self.form_widgets["ip"].setPlaceholderText("192.168.1.x")
+                self.form_widgets["ip"].setToolTip("IP address of your LG WebOS TV")
+            
+            ip_layout.addWidget(ip_label)
+            ip_layout.addWidget(self.form_widgets["ip"])
+            webos_layout.addLayout(ip_layout)
+            
+            if saved_tvs:
+                webos_layout.addLayout(custom_ip_layout)
+            
+            # Connection status and Connect button
+            status_layout = QtWidgets.QHBoxLayout()
+            self.form_widgets["connection_status"] = QtWidgets.QLabel("Status: Not connected")
+            self.form_widgets["connection_status"].setStyleSheet("color: #888888;")
+            
+            self.form_widgets["connect_button"] = QtWidgets.QPushButton("Connect")
+            self.form_widgets["connect_button"].setStyleSheet(ACTION_BUTTON_STYLE)
+            self.form_widgets["connect_button"].clicked.connect(self.connect_to_webos_tv)
+            
+            status_layout.addWidget(self.form_widgets["connection_status"])
+            status_layout.addStretch()
+            status_layout.addWidget(self.form_widgets["connect_button"])
+            webos_layout.addLayout(status_layout)
+            
+            # Add separator
+            separator = QtWidgets.QFrame()
+            separator.setFrameShape(QtWidgets.QFrame.HLine)
+            separator.setFrameStyle(QtWidgets.QFrame.Sunken)
+            separator.setStyleSheet("background-color: #333333; max-height: 1px;")
+            webos_layout.addWidget(separator)
+            
+            # Command section
+            command_layout = QtWidgets.QVBoxLayout()
+            command_label = QtWidgets.QLabel("Command:")
+            command_label.setStyleSheet(f"color: {TEXT_COLOR}; font-weight: bold;")
+            command_layout.addWidget(command_label)
+            
+            # Command category selection
+            category_layout = QtWidgets.QHBoxLayout()
+            category_label = QtWidgets.QLabel("Category:")
+            category_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            
+            self.form_widgets["command_category"] = QtWidgets.QComboBox()
+            self.form_widgets["command_category"].setStyleSheet(COMBOBOX_STYLE)
+            self.form_widgets["command_category"].addItem("Built-in Commands", "builtin")
+            self.form_widgets["command_category"].addItem("Custom Command", "custom")
+            
+            category_layout.addWidget(category_label)
+            category_layout.addWidget(self.form_widgets["command_category"])
+            command_layout.addLayout(category_layout)
+            
+            # Command selection (for built-in commands)
+            self.form_widgets["command"] = QtWidgets.QComboBox()
+            self.form_widgets["command"].setStyleSheet(COMBOBOX_STYLE)
+            
+            # Get available commands if WebOS module is available
+            if WEBOS_AVAILABLE:
+                commands = webos_manager.get_command_list()
+                for cmd_name, cmd_info in commands.items():
+                    self.form_widgets["command"].addItem(f"{cmd_name}: {cmd_info['description']}", cmd_info['command'])
+                    
+                # Select the saved command if it exists
+                saved_command = existing_data.get("command", "")
+                for i in range(self.form_widgets["command"].count()):
+                    if self.form_widgets["command"].itemData(i) == saved_command:
+                        self.form_widgets["command"].setCurrentIndex(i)
+                        break
+            
+            # Custom command input
+            self.form_widgets["custom_command"] = QtWidgets.QLineEdit(existing_data.get("command", ""))
+            self.form_widgets["custom_command"].setStyleSheet(LINEEDIT_STYLE)
+            self.form_widgets["custom_command"].setPlaceholderText("e.g. button/HOME, media.controls/play, launcher/netflix")
+            
+            # Function to toggle visibility based on category selection
+            def update_command_inputs():
+                is_custom = self.form_widgets["command_category"].currentData() == "custom"
+                self.form_widgets["command"].setVisible(not is_custom)
+                self.form_widgets["custom_command"].setVisible(is_custom)
+            
+            # Set initial category based on existing data
+            if "command" in existing_data:
+                # Check if the command matches any built-in command
+                command_found = False
+                if WEBOS_AVAILABLE:
+                    for i in range(self.form_widgets["command"].count()):
+                        if self.form_widgets["command"].itemData(i) == existing_data["command"]:
+                            command_found = True
+                            self.form_widgets["command_category"].setCurrentIndex(0)  # Built-in
+                            break
+                
+                # If not found or if webos isn't available, assume custom
+                if not command_found:
+                    self.form_widgets["command_category"].setCurrentIndex(1)  # Custom
+                    self.form_widgets["custom_command"].setText(existing_data["command"])
+            
+            # Connect category change to update visibility
+            self.form_widgets["command_category"].currentIndexChanged.connect(update_command_inputs)
+            
+            # Add command widgets to layout
+            command_layout.addWidget(self.form_widgets["command"])
+            command_layout.addWidget(self.form_widgets["custom_command"])
+            
+            # Set initial visibility based on category
+            update_command_inputs()
+            
+            webos_layout.addLayout(command_layout)
+            
+            # Help text
+            help_text = QtWidgets.QLabel(
+                "Control an LG TV with WebOS. First connect to save the pairing key, then select a command to send. "
+                "The TV will auto-connect in the future when this button is pressed."
+            )
+            help_text.setStyleSheet("color: #888888; font-style: italic; font-size: 12px;")
+            help_text.setWordWrap(True)
+            webos_layout.addWidget(help_text)
+            
+            self.action_form_layout.addWidget(webos_frame)
+            
+            # Check connection status if we have an IP
+            if isinstance(self.form_widgets.get("ip"), QtWidgets.QComboBox):
+                ip = self.form_widgets["ip"].currentData()
+                if ip:
+                    self.check_webos_connection_status(ip)
+            else:
+                ip = self.form_widgets.get("ip", QtWidgets.QLineEdit()).text().strip()
+                if ip:
+                    self.check_webos_connection_status(ip)
+        
         # Add default message for unknown action types
         else:
             logger.warning(f"Unknown action type: {action_type}")
@@ -3353,6 +3651,7 @@ class ButtonConfigDialog(QtWidgets.QDialog):
                 action_data["model"] = model_combobox.itemData(model_index)
                 action_data["language"] = self.language_map_chatgpt.get(self.form_widgets.get("language_chatgpt", QtWidgets.QComboBox()).currentText(), "en-US")
                 action_data["system_prompt"] = self.form_widgets.get("system_prompt", QtWidgets.QTextEdit()).toPlainText()
+                return action_data
             
         elif action_type == "text_to_speech":
             return {
@@ -3361,6 +3660,60 @@ class ButtonConfigDialog(QtWidgets.QDialog):
                 "mood": self.form_widgets.get("mood", QtWidgets.QComboBox()).currentData(),
                 "frequency": self.form_widgets.get("frequency", QtWidgets.QComboBox()).currentData(),
                 "text_source": self.form_widgets.get("text_source", QtWidgets.QComboBox()).currentData(),
+            }
+            
+        elif action_type == "wake_on_lan":
+            action_data = {
+                "mac_address": self.form_widgets.get("mac_address", QtWidgets.QLineEdit()).text(),
+                "ip_address": self.form_widgets.get("ip_address", QtWidgets.QLineEdit()).text()
+            }
+            
+            # Only add port if it's specified
+            port_text = self.form_widgets.get("port", QtWidgets.QLineEdit()).text().strip()
+            if port_text:
+                try:
+                    port = int(port_text)
+                    action_data["port"] = port
+                except ValueError:
+                    # If conversion fails, don't include port
+                    pass
+                    
+            return action_data
+        
+        elif action_type == "webos_tv":
+            # Get IP address based on widget type
+            if hasattr(self, "form_widgets") and isinstance(self.form_widgets.get("ip"), QtWidgets.QComboBox):
+                if self.form_widgets["ip"].currentIndex() == 0:  # "New TV..." option
+                    ip = self.form_widgets.get("custom_ip", QtWidgets.QLineEdit()).text().strip()
+                else:
+                    ip = self.form_widgets["ip"].currentData()
+            else:
+                # Check the type of the widget to handle it correctly
+                ip_widget = self.form_widgets.get("ip")
+                if isinstance(ip_widget, QtWidgets.QComboBox):
+                    if ip_widget.currentIndex() == 0:
+                        ip = self.form_widgets.get("custom_ip", QtWidgets.QLineEdit()).text().strip()
+                    else:
+                        ip = ip_widget.currentData()
+                elif isinstance(ip_widget, QtWidgets.QLineEdit):
+                    ip = ip_widget.text().strip()
+                else:
+                    # Fallback case
+                    ip = ""
+                    logger.warning(f"Unexpected widget type for IP in get_action_data: {type(ip_widget)}")
+            
+            # Get command based on category selection
+            command = ""
+            if self.form_widgets.get("command_category", QtWidgets.QComboBox()).currentData() == "custom":
+                command = self.form_widgets.get("custom_command", QtWidgets.QLineEdit()).text().strip()
+            else:
+                command_widget = self.form_widgets.get("command", QtWidgets.QComboBox())
+                if command_widget and command_widget.currentData():
+                    command = command_widget.currentData()
+            
+            return {
+                "ip": ip,
+                "command": command
             }
         
         # Default - empty data
@@ -3409,6 +3762,209 @@ class ButtonConfigDialog(QtWidgets.QDialog):
         
         # Execute the action
         self.parent.execute_button_action(self.button_id, value)
+        
+    def connect_to_webos_tv(self):
+        """Connect to WebOS TV during configuration"""
+        if not WEBOS_AVAILABLE:
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "Module Not Available", 
+                "WebOS TV module is not available. Install aiowebostv with 'pip install aiowebostv'"
+            )
+            return
+            
+        # Get IP address
+        if hasattr(self.form_widgets, "ip") and isinstance(self.form_widgets.get("ip"), QtWidgets.QComboBox):
+            if self.form_widgets["ip"].currentIndex() == 0:  # "New TV..." option
+                ip = self.form_widgets.get("custom_ip", QtWidgets.QLineEdit()).text().strip()
+            else:
+                ip = self.form_widgets["ip"].currentData()
+        else:
+            # Check the type of the widget to handle it correctly
+            ip_widget = self.form_widgets.get("ip")
+            if isinstance(ip_widget, QtWidgets.QComboBox):
+                if ip_widget.currentIndex() == 0:
+                    ip = self.form_widgets.get("custom_ip", QtWidgets.QLineEdit()).text().strip()
+                else:
+                    ip = ip_widget.currentData()
+            elif isinstance(ip_widget, QtWidgets.QLineEdit):
+                ip = ip_widget.text().strip()
+            else:
+                # Fallback case
+                ip = ""
+                logger.warning(f"Unexpected widget type for IP: {type(ip_widget)}")
+            
+        if not ip:
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "Missing IP Address", 
+                "Please enter the IP address of your LG TV."
+            )
+            return
+            
+        # Update status
+        self.form_widgets["connection_status"].setText("Status: Connecting...")
+        self.form_widgets["connection_status"].setStyleSheet("color: #FFA500;")  # Orange
+        self.form_widgets["connect_button"].setEnabled(False)
+        
+        # Create a progress dialog
+        progress = QtWidgets.QProgressDialog("Connecting to TV...", "Cancel", 0, 0, self)
+        progress.setWindowTitle("Connecting")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(500)  # Show after 500ms
+        progress.setCancelButton(None)  # No cancel button
+        progress.setMinimumWidth(300)
+        
+        # Run connection in a thread
+        def connect_thread():
+            try:
+                success = False
+                key = None
+                
+                def run_async():
+                    async def async_connect():
+                        nonlocal success, key
+                        try:
+                            # Try to get saved client key
+                            client_key = None
+                            if ip in webos_manager.config:
+                                client_key = webos_manager.config[ip].get("client_key")
+                                
+                            # Connect to TV
+                            connect_success, new_key = await webos_manager.connect(ip, client_key)
+                            success = connect_success
+                            key = new_key
+                        except Exception as e:
+                            logger.error(f"Error connecting to WebOS TV: {e}")
+                            success = False
+                    
+                    # Create and run event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(async_connect())
+                    finally:
+                        loop.close()
+                
+                run_async()
+                
+                # Update UI on main thread
+                QtCore.QMetaObject.invokeMethod(
+                    self, "webos_connection_complete", 
+                    Qt.QueuedConnection, 
+                    QtCore.Q_ARG(bool, success),
+                    QtCore.Q_ARG(str, ip),
+                    QtCore.Q_ARG(str, key or "")
+                )
+                
+            except Exception as e:
+                logger.error(f"Error in WebOS TV connection thread: {e}")
+                # Update UI on failure
+                QtCore.QMetaObject.invokeMethod(
+                    self, "webos_connection_complete", 
+                    Qt.QueuedConnection, 
+                    QtCore.Q_ARG(bool, False),
+                    QtCore.Q_ARG(str, ip),
+                    QtCore.Q_ARG(str, "")
+                )
+                
+            # Close progress dialog
+            QtCore.QMetaObject.invokeMethod(
+                progress, "close", 
+                Qt.QueuedConnection
+            )
+        
+        # Start the thread
+        threading.Thread(target=connect_thread).start()
+    
+    @QtCore.Slot(bool, str, str)
+    def webos_connection_complete(self, success, ip, key):
+        """Handle WebOS TV connection completion"""
+        self.form_widgets["connect_button"].setEnabled(True)
+        
+        if success:
+            self.form_widgets["connection_status"].setText("Status: Connected ✅")
+            self.form_widgets["connection_status"].setStyleSheet("color: #50fa7b;")  # Green
+            
+            # Show success message
+            tv_name = webos_manager.config.get(ip, {}).get("name", f"LG TV ({ip})")
+            QtWidgets.QMessageBox.information(
+                self, 
+                "Connection Successful", 
+                f"Successfully connected to {tv_name}.\n\nYour TV has been paired and will auto-connect when you use this button."
+            )
+            
+            # If we were using the combobox and this was a new TV, refresh the list
+            if hasattr(self.form_widgets, "ip") and isinstance(self.form_widgets.get("ip"), QtWidgets.QComboBox):
+                # Temporarily block signals
+                self.form_widgets["ip"].blockSignals(True)
+                
+                # Save current selection and custom IP
+                was_custom = self.form_widgets["ip"].currentIndex() == 0
+                custom_ip = self.form_widgets["custom_ip"].text().strip()
+                
+                # Refresh TV list
+                self.form_widgets["ip"].clear()
+                self.form_widgets["ip"].addItem("New TV...", "")
+                
+                # Get updated TV list
+                saved_tvs = webos_manager.get_known_tvs()
+                selected_index = 0
+                
+                # Add saved TVs
+                idx = 1
+                for tv_ip, tv_name in saved_tvs.items():
+                    self.form_widgets["ip"].addItem(f"{tv_name} ({tv_ip})", tv_ip)
+                    if tv_ip == ip:
+                        selected_index = idx
+                    idx += 1
+                    
+                # Restore selection
+                if was_custom and ip not in saved_tvs:
+                    self.form_widgets["ip"].setCurrentIndex(0)
+                    self.form_widgets["custom_ip"].setText(custom_ip)
+                else:
+                    self.form_widgets["ip"].setCurrentIndex(selected_index)
+                    
+                # Restore signals
+                self.form_widgets["ip"].blockSignals(False)
+                
+                # Force update of custom IP visibility
+                if hasattr(self.form_widgets, "custom_ip"):
+                    visible = self.form_widgets["ip"].currentIndex() == 0
+                    self.form_widgets["custom_ip"].setVisible(visible)
+        else:
+            self.form_widgets["connection_status"].setText("Status: Connection failed ❌")
+            self.form_widgets["connection_status"].setStyleSheet("color: #ff5555;")  # Red
+            
+            # Show error message
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "Connection Failed", 
+                f"Failed to connect to TV at {ip}.\n\nPlease make sure:\n- The TV is powered on\n- The TV is connected to your network\n- The IP address is correct\n- The TV is running WebOS"
+            )
+    
+    def check_webos_connection_status(self, ip):
+        """Check WebOS TV connection status for an existing configuration"""
+        if not WEBOS_AVAILABLE or not ip:
+            return
+            
+        # Get current status
+        status = webos_manager.get_connection_status(ip)
+        
+        # Update status display
+        if status == "connected":
+            self.form_widgets["connection_status"].setText("Status: Connected ✅")
+            self.form_widgets["connection_status"].setStyleSheet("color: #50fa7b;")  # Green
+        elif status == "connecting":
+            self.form_widgets["connection_status"].setText("Status: Connecting...")
+            self.form_widgets["connection_status"].setStyleSheet("color: #FFA500;")  # Orange
+        elif status == "error":
+            self.form_widgets["connection_status"].setText("Status: Connection error ❌")
+            self.form_widgets["connection_status"].setStyleSheet("color: #ff5555;")  # Red
+        else:
+            self.form_widgets["connection_status"].setText("Status: Not connected")
+            self.form_widgets["connection_status"].setStyleSheet("color: #888888;")  # Gray
 
 class NotificationSettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent, notification_manager):
@@ -3983,14 +4539,13 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
         font_family_label = QtWidgets.QLabel("Font Family:")
         font_family_label.setStyleSheet(f"color: {TEXT_COLOR};")
         
-        self.font_family_combo = QtWidgets.QComboBox()
+        # Replace QComboBox with QFontComboBox to show all system fonts
+        self.font_family_combo = QtWidgets.QFontComboBox()
         self.font_family_combo.setStyleSheet(COMBOBOX_STYLE)
         
-        # Add common system fonts
-        self.font_family_combo.addItem("System Default")
-        common_fonts = ["Arial", "Segoe UI", "Helvetica", "Calibri", "Times New Roman", "Georgia", "Verdana", "Tahoma", "Consolas"]
-        for font in common_fonts:
-            self.font_family_combo.addItem(font)
+        # Add "System Default" option at the beginning
+        current_fonts = [self.font_family_combo.itemText(i) for i in range(self.font_family_combo.count())]
+        self.font_family_combo.insertItem(0, "System Default")
             
         # Set current font family if available
         theme_settings = self.notification_manager.settings.get("theme_settings", {})
@@ -3999,6 +4554,8 @@ class NotificationSettingsDialog(QtWidgets.QDialog):
             index = self.font_family_combo.findText(font_family)
             if index >= 0:
                 self.font_family_combo.setCurrentIndex(index)
+        else:
+            self.font_family_combo.setCurrentIndex(0)  # Default to "System Default"
         
         font_grid.addWidget(font_family_label, 0, 0)
         font_grid.addWidget(self.font_family_combo, 0, 1)

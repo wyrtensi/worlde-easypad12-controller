@@ -24,3 +24,4 @@ openai
 yandex_tts_free
 requests
 ffmpeg-python
+aiowebostv
