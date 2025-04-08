@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 2, 6, 0),
-    prodvers=(1, 2, 6, 0),
+    filevers=(1, 2, 7, 0),
+    prodvers=(1, 2, 7, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'wyrtensi'),
             StringStruct('FileDescription', 'WORLDE EASYPAD.12 Controller'),
-            StringStruct('FileVersion', '1.2.6.0'),
+            StringStruct('FileVersion', '1.2.7.0'),
             StringStruct('InternalName', 'run.py'),
             StringStruct('LegalCopyright', 'wyrtensi'),
             StringStruct('OriginalFilename', 'EASYPAD12Controller.exe'),
             StringStruct('ProductName', 'WORLDE EASYPAD.12 Controller'),
-            StringStruct('ProductVersion', '1.2.6.0'),
+            StringStruct('ProductVersion', '1.2.7.0'),
           ]
         )
       ]

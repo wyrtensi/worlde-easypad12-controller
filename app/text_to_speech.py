@@ -106,22 +106,6 @@ class TextToSpeechManager:
                     "zahar": "Zahar",
                     "ermil": "Ermil"
                 }
-            },
-            "en_US": {
-                "name": "English",
-                "voices": {
-                    "john": "John",
-                    "jane": "Jane",
-                    "omazh": "Omazh"
-                }
-            },
-            "auto": {
-                "name": "Auto-detect",
-                "voices": {
-                    "auto": "Auto",
-                    "jane": "Jane",
-                    "omazh": "Omazh"
-                }
             }
         }
         
@@ -451,33 +435,62 @@ class TextToSpeechManager:
                 try:
                     # For long texts, split into smaller chunks to avoid API limits
                     # and merging issues
-                    MAX_CHARS_PER_REQUEST = 1000
+                    MAX_CHARS_PER_REQUEST = 800  # Reduced chunk size for API limits
                     if len(text) > MAX_CHARS_PER_REQUEST:
                         logger.info(f"Text is long ({len(text)} chars), processing in chunks")
                         
+                        # Create a unique session ID for this TTS generation
+                        session_id = int(time.time() * 1000)
+                        temp_files = []
+                        
+                        # Clean up any old temp files before starting
+                        try:
+                            for old_file in os.listdir(output_dir):
+                                if old_file.startswith("chunk_") and old_file.endswith(".mp3"):
+                                    old_path = os.path.join(output_dir, old_file)
+                                    try:
+                                        os.remove(old_path)
+                                        logger.debug(f"Cleaned up old chunk file: {old_file}")
+                                    except Exception as e:
+                                        logger.warning(f"Could not remove old chunk file {old_file}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Error cleaning up old chunks: {e}")
+                        
                         # Split text into sentences to avoid cutting words
                         import re
-                        sentences = re.split(r'(?<=[.!?])\s+', text)
+                        # Split on sentence endings and line breaks
+                        sentences = [s.strip() for s in re.split(r'([.!?\n]+)', text) if s.strip()]
                         
                         # Process each sentence separately and collect audio files
-                        temp_files = []
                         current_chunk = ""
                         chunk_count = 1
                         
                         for sentence in sentences:
                             # If adding this sentence would exceed the limit, process the current chunk
                             if len(current_chunk) + len(sentence) > MAX_CHARS_PER_REQUEST and current_chunk:
-                                # Generate temporary filename
-                                temp_file = os.path.join(output_dir, f"chunk_{chunk_count}.mp3")
+                                # Generate temporary filename with session ID
+                                temp_file = os.path.join(output_dir, f"chunk_{session_id}_{chunk_count}.mp3")
                                 logger.debug(f"Processing chunk {chunk_count} ({len(current_chunk)} chars)")
                                 
                                 # Generate audio for this chunk
                                 chunk_tts = TTS_class()
                                 try:
-                                    chunk_tts.generate(current_chunk, temp_file)
-                                    if os.path.exists(temp_file):
+                                    # Clean the text before sending to API
+                                    clean_text = current_chunk.strip().replace('\r', ' ').replace('\n', ' ')
+                                    while '  ' in clean_text:  # Remove double spaces
+                                        clean_text = clean_text.replace('  ', ' ')
+                                        
+                                    chunk_tts.generate_speech_ya(
+                                        output_path=output_dir,
+                                        filename=os.path.basename(temp_file),
+                                        text=clean_text,
+                                        speaker=voice,
+                                        mood=mood
+                                    )
+                                    if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
                                         temp_files.append(temp_file)
                                         chunk_count += 1
+                                        logger.debug(f"Successfully generated chunk {chunk_count-1}")
                                     else:
                                         logger.error(f"Failed to generate audio for chunk {chunk_count}")
                                 except Exception as chunk_err:
@@ -494,14 +507,26 @@ class TextToSpeechManager:
                         
                         # Process the final chunk if it's not empty
                         if current_chunk:
-                            temp_file = os.path.join(output_dir, f"chunk_{chunk_count}.mp3")
+                            temp_file = os.path.join(output_dir, f"chunk_{session_id}_{chunk_count}.mp3")
                             logger.debug(f"Processing final chunk {chunk_count} ({len(current_chunk)} chars)")
                             
                             chunk_tts = TTS_class()
                             try:
-                                chunk_tts.generate(current_chunk, temp_file)
-                                if os.path.exists(temp_file):
+                                # Clean the text before sending to API
+                                clean_text = current_chunk.strip().replace('\r', ' ').replace('\n', ' ')
+                                while '  ' in clean_text:  # Remove double spaces
+                                    clean_text = clean_text.replace('  ', ' ')
+                                    
+                                chunk_tts.generate_speech_ya(
+                                    output_path=output_dir,
+                                    filename=os.path.basename(temp_file),
+                                    text=clean_text,
+                                    speaker=voice,
+                                    mood=mood
+                                )
+                                if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
                                     temp_files.append(temp_file)
+                                    logger.debug(f"Successfully generated final chunk")
                                 else:
                                     logger.error(f"Failed to generate audio for final chunk")
                             except Exception as chunk_err:
@@ -511,38 +536,77 @@ class TextToSpeechManager:
                         if temp_files:
                             try:
                                 logger.debug(f"Concatenating {len(temp_files)} audio chunks")
-                                # Create a temporary file listing all input files
-                                list_file = os.path.join(output_dir, "filelist.txt")
-                                with open(list_file, "w") as f:
-                                    for temp_file in temp_files:
-                                        f.write(f"file '{temp_file}'\n")
                                 
-                                # Use ffmpeg to concatenate the files
-                                ffmpeg_cmd = [
-                                    "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
-                                    "-i", list_file, "-c", "copy", self.temp_file_path
-                                ]
-                                logger.debug(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
-                                ffmpeg_result = subprocess.run(
-                                    ffmpeg_cmd,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE,
-                                    universal_newlines=True
-                                )
-                                
-                                if ffmpeg_result.returncode != 0:
-                                    logger.error(f"ffmpeg concatenation failed: {ffmpeg_result.stderr}")
-                                    # Fallback: use the first chunk as the output
-                                    if temp_files:
-                                        import shutil
-                                        shutil.copy(temp_files[0], self.temp_file_path)
-                                        logger.info("Fallback: using first chunk as output")
+                                # Direct binary concatenation of MP3 files
+                                try:
+                                    # Read all chunks into memory
+                                    chunks = []
+                                    for temp_file in sorted(temp_files):
+                                        with open(temp_file, 'rb') as f:
+                                            chunks.append(f.read())
+                                    
+                                    # Write concatenated data
+                                    with open(self.temp_file_path, 'wb') as f:
+                                        for chunk in chunks:
+                                            f.write(chunk)
+                                                
+                                    logger.info("Successfully concatenated all chunks using direct method")
+                                    
+                                except Exception as concat_err:
+                                    logger.error(f"Direct concatenation failed: {concat_err}")
+                                    # Try pygame mixer concatenation
+                                    try:
+                                        import pygame
+                                        pygame.mixer.init()
+                                        
+                                        # Load all sounds
+                                        sounds = []
+                                        total_length = 0
+                                        for temp_file in sorted(temp_files):
+                                            sound = pygame.mixer.Sound(temp_file)
+                                            sounds.append(sound)
+                                            total_length += sound.get_length()
+                                        
+                                        # Create a queue of sounds
+                                        def play_next():
+                                            if sounds:
+                                                sound = sounds.pop(0)
+                                                sound.play()
+                                                # Schedule next sound
+                                                pygame.time.set_timer(pygame.USEREVENT, int(sound.get_length() * 1000))
+                                            else:
+                                                pygame.time.set_timer(pygame.USEREVENT, 0)
+                                        
+                                        # Start playing
+                                        play_next()
+                                        
+                                        # Event loop to handle sound transitions
+                                        running = True
+                                        while running and pygame.mixer.get_busy():
+                                            for event in pygame.event.get():
+                                                if event.type == pygame.USEREVENT:
+                                                    play_next()
+                                            pygame.time.wait(100)
+                                        
+                                        pygame.mixer.quit()
+                                        logger.info("Successfully played chunks using pygame mixer")
+                                        
+                                    except Exception as pygame_err:
+                                        logger.error(f"Pygame mixer fallback failed: {pygame_err}")
+                                        # If both methods fail, use the first chunk
+                                        if temp_files:
+                                            import shutil
+                                            shutil.copy(temp_files[0], self.temp_file_path)
+                                            logger.info("Fallback: using first chunk as output")
                                 
                                 # Clean up temporary files
                                 try:
                                     for temp_file in temp_files:
-                                        os.remove(temp_file)
-                                    os.remove(list_file)
+                                        try:
+                                            os.remove(temp_file)
+                                            logger.debug(f"Removed temp file: {temp_file}")
+                                        except Exception as e:
+                                            logger.warning(f"Could not remove temp file {temp_file}: {e}")
                                 except Exception as cleanup_err:
                                     logger.warning(f"Error cleaning up temp files: {cleanup_err}")
                                 
@@ -559,27 +623,18 @@ class TextToSpeechManager:
                     else:
                         # For shorter texts, use standard method
                         try:
-                            # Try direct generate method first (simplest approach)
-                            tts.generate(text, self.temp_file_path)
-                            logger.debug("Successfully generated audio with generate method")
+                            # Try generate_speech_ya method (direct approach)
+                            tts.generate_speech_ya(
+                                output_path=output_dir,
+                                filename=filename,
+                                text=text,
+                                speaker=voice,
+                                mood=mood
+                            )
+                            logger.debug("Successfully generated audio with generate_speech_ya method")
                         except Exception as gen_err:
-                            logger.error(f"Error with generate method: {gen_err}")
-                            logger.info("Falling back to generate_speech_ya method")
-                            
-                            # Fallback to generate_speech_ya
-                            try:
-                                tts.generate_speech_ya(
-                                    output_path=output_dir,
-                                    filename=filename,
-                                    text=text,
-                                    speaker=voice,
-                                    mood=mood
-                                )
-                                logger.debug("Successfully called generate_speech_ya")
-                            except Exception as ya_err:
-                                logger.error(f"Error calling generate_speech_ya: {ya_err}")
-                                logger.error(traceback.format_exc())
-                                return False
+                            logger.error(f"Error with generate_speech_ya method: {gen_err}")
+                            return False
                 except Exception as e:
                     logger.error(f"Error in TTS generation: {e}")
                     logger.error(traceback.format_exc())
