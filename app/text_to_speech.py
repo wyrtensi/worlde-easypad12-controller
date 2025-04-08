@@ -441,185 +441,184 @@ class TextToSpeechManager:
                         
                         # Create a unique session ID for this TTS generation
                         session_id = int(time.time() * 1000)
-                        temp_files = []
-                        
-                        # Clean up any old temp files before starting
-                        try:
-                            for old_file in os.listdir(output_dir):
-                                if old_file.startswith("chunk_") and old_file.endswith(".mp3"):
-                                    old_path = os.path.join(output_dir, old_file)
-                                    try:
-                                        os.remove(old_path)
-                                        logger.debug(f"Cleaned up old chunk file: {old_file}")
-                                    except Exception as e:
-                                        logger.warning(f"Could not remove old chunk file {old_file}: {e}")
-                        except Exception as e:
-                            logger.warning(f"Error cleaning up old chunks: {e}")
                         
                         # Split text into sentences to avoid cutting words
                         import re
                         # Split on sentence endings and line breaks
                         sentences = [s.strip() for s in re.split(r'([.!?\n]+)', text) if s.strip()]
                         
-                        # Process each sentence separately and collect audio files
-                        current_chunk = ""
-                        chunk_count = 1
-                        
-                        for sentence in sentences:
-                            # If adding this sentence would exceed the limit, process the current chunk
-                            if len(current_chunk) + len(sentence) > MAX_CHARS_PER_REQUEST and current_chunk:
-                                # Generate temporary filename with session ID
-                                temp_file = os.path.join(output_dir, f"chunk_{session_id}_{chunk_count}.mp3")
-                                logger.debug(f"Processing chunk {chunk_count} ({len(current_chunk)} chars)")
-                                
-                                # Generate audio for this chunk
-                                chunk_tts = TTS_class()
-                                try:
-                                    # Clean the text before sending to API
-                                    clean_text = current_chunk.strip().replace('\r', ' ').replace('\n', ' ')
-                                    while '  ' in clean_text:  # Remove double spaces
-                                        clean_text = clean_text.replace('  ', ' ')
-                                        
-                                    chunk_tts.generate_speech_ya(
-                                        output_path=output_dir,
-                                        filename=os.path.basename(temp_file),
-                                        text=clean_text,
-                                        speaker=voice,
-                                        mood=mood
-                                    )
-                                    if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-                                        temp_files.append(temp_file)
-                                        chunk_count += 1
-                                        logger.debug(f"Successfully generated chunk {chunk_count-1}")
-                                    else:
-                                        logger.error(f"Failed to generate audio for chunk {chunk_count}")
-                                except Exception as chunk_err:
-                                    logger.error(f"Error processing chunk {chunk_count}: {chunk_err}")
-                                
-                                # Reset current chunk
-                                current_chunk = sentence
-                            else:
-                                # Add sentence to current chunk
-                                if current_chunk:
-                                    current_chunk += " " + sentence
-                                else:
-                                    current_chunk = sentence
-                        
-                        # Process the final chunk if it's not empty
-                        if current_chunk:
-                            temp_file = os.path.join(output_dir, f"chunk_{session_id}_{chunk_count}.mp3")
-                            logger.debug(f"Processing final chunk {chunk_count} ({len(current_chunk)} chars)")
+                        # Initialize pygame for streaming playback
+                        try:
+                            import pygame
+                            pygame.mixer.init()
+                            self.pygame_initialized = True
+                            logger.info("Initialized pygame mixer for streaming playback")
+                        except Exception as pygame_init_err:
+                            logger.error(f"Failed to initialize pygame mixer: {pygame_init_err}")
+                            pygame = None
                             
-                            chunk_tts = TTS_class()
-                            try:
-                                # Clean the text before sending to API
-                                clean_text = current_chunk.strip().replace('\r', ' ').replace('\n', ' ')
-                                while '  ' in clean_text:  # Remove double spaces
-                                    clean_text = clean_text.replace('  ', ' ')
-                                    
-                                chunk_tts.generate_speech_ya(
-                                    output_path=output_dir,
-                                    filename=os.path.basename(temp_file),
-                                    text=clean_text,
-                                    speaker=voice,
-                                    mood=mood
-                                )
-                                if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-                                    temp_files.append(temp_file)
-                                    logger.debug(f"Successfully generated final chunk")
-                                else:
-                                    logger.error(f"Failed to generate audio for final chunk")
-                            except Exception as chunk_err:
-                                logger.error(f"Error processing final chunk: {chunk_err}")
+                        # Create a queue for producer-consumer pattern
+                        import queue
+                        audio_queue = queue.Queue()
+                        generation_complete = threading.Event()
                         
-                        # Concatenate all audio files using ffmpeg directly
-                        if temp_files:
+                        # Producer function to generate chunks
+                        def generate_chunks():
                             try:
-                                logger.debug(f"Concatenating {len(temp_files)} audio chunks")
+                                # Process each sentence separately and collect audio files
+                                current_chunk = ""
+                                chunk_count = 1
                                 
-                                # Direct binary concatenation of MP3 files
-                                try:
-                                    # Read all chunks into memory
-                                    chunks = []
-                                    for temp_file in sorted(temp_files):
-                                        with open(temp_file, 'rb') as f:
-                                            chunks.append(f.read())
-                                    
-                                    # Write concatenated data
-                                    with open(self.temp_file_path, 'wb') as f:
-                                        for chunk in chunks:
-                                            f.write(chunk)
-                                                
-                                    logger.info("Successfully concatenated all chunks using direct method")
-                                    
-                                except Exception as concat_err:
-                                    logger.error(f"Direct concatenation failed: {concat_err}")
-                                    # Try pygame mixer concatenation
-                                    try:
-                                        import pygame
-                                        pygame.mixer.init()
+                                for sentence in sentences:
+                                    # If adding this sentence would exceed the limit, process the current chunk
+                                    if len(current_chunk) + len(sentence) > MAX_CHARS_PER_REQUEST and current_chunk:
+                                        # Generate temporary filename with session ID
+                                        temp_file = os.path.join(output_dir, f"chunk_{session_id}_{chunk_count}.mp3")
+                                        logger.debug(f"Processing chunk {chunk_count} ({len(current_chunk)} chars)")
                                         
-                                        # Load all sounds
-                                        sounds = []
-                                        total_length = 0
-                                        for temp_file in sorted(temp_files):
-                                            sound = pygame.mixer.Sound(temp_file)
-                                            sounds.append(sound)
-                                            total_length += sound.get_length()
-                                        
-                                        # Create a queue of sounds
-                                        def play_next():
-                                            if sounds:
-                                                sound = sounds.pop(0)
-                                                sound.play()
-                                                # Schedule next sound
-                                                pygame.time.set_timer(pygame.USEREVENT, int(sound.get_length() * 1000))
-                                            else:
-                                                pygame.time.set_timer(pygame.USEREVENT, 0)
-                                        
-                                        # Start playing
-                                        play_next()
-                                        
-                                        # Event loop to handle sound transitions
-                                        running = True
-                                        while running and pygame.mixer.get_busy():
-                                            for event in pygame.event.get():
-                                                if event.type == pygame.USEREVENT:
-                                                    play_next()
-                                            pygame.time.wait(100)
-                                        
-                                        pygame.mixer.quit()
-                                        logger.info("Successfully played chunks using pygame mixer")
-                                        
-                                    except Exception as pygame_err:
-                                        logger.error(f"Pygame mixer fallback failed: {pygame_err}")
-                                        # If both methods fail, use the first chunk
-                                        if temp_files:
-                                            import shutil
-                                            shutil.copy(temp_files[0], self.temp_file_path)
-                                            logger.info("Fallback: using first chunk as output")
-                                
-                                # Clean up temporary files
-                                try:
-                                    for temp_file in temp_files:
+                                        # Generate audio for this chunk
+                                        chunk_tts = TTS_class()
                                         try:
-                                            os.remove(temp_file)
-                                            logger.debug(f"Removed temp file: {temp_file}")
-                                        except Exception as e:
-                                            logger.warning(f"Could not remove temp file {temp_file}: {e}")
-                                except Exception as cleanup_err:
-                                    logger.warning(f"Error cleaning up temp files: {cleanup_err}")
+                                            # Clean the text before sending to API
+                                            clean_text = current_chunk.strip().replace('\r', ' ').replace('\n', ' ')
+                                            while '  ' in clean_text:  # Remove double spaces
+                                                clean_text = clean_text.replace('  ', ' ')
+                                                
+                                            chunk_tts.generate_speech_ya(
+                                                output_path=output_dir,
+                                                filename=os.path.basename(temp_file),
+                                                text=clean_text,
+                                                speaker=voice,
+                                                mood=mood
+                                            )
+                                            if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+                                                # Add to queue for playback
+                                                audio_queue.put((chunk_count, temp_file))
+                                                logger.debug(f"Successfully generated chunk {chunk_count}")
+                                                chunk_count += 1
+                                            else:
+                                                logger.error(f"Failed to generate audio for chunk {chunk_count}")
+                                        except Exception as chunk_err:
+                                            logger.error(f"Error processing chunk {chunk_count}: {chunk_err}")
+                                        
+                                        # Reset current chunk
+                                        current_chunk = sentence
+                                    else:
+                                        # Add sentence to current chunk
+                                        if current_chunk:
+                                            current_chunk += " " + sentence
+                                        else:
+                                            current_chunk = sentence
                                 
-                            except Exception as concat_err:
-                                logger.error(f"Error concatenating audio chunks: {concat_err}")
-                                # Fallback: use the first chunk as the output
-                                if temp_files:
-                                    import shutil
-                                    shutil.copy(temp_files[0], self.temp_file_path)
-                                    logger.info("Fallback: using first chunk as output after error")
-                        else:
-                            logger.error("No audio chunks were generated successfully")
-                            return False
+                                # Process the final chunk if it's not empty
+                                if current_chunk:
+                                    temp_file = os.path.join(output_dir, f"chunk_{session_id}_{chunk_count}.mp3")
+                                    logger.debug(f"Processing final chunk {chunk_count} ({len(current_chunk)} chars)")
+                                    
+                                    chunk_tts = TTS_class()
+                                    try:
+                                        # Clean the text before sending to API
+                                        clean_text = current_chunk.strip().replace('\r', ' ').replace('\n', ' ')
+                                        while '  ' in clean_text:  # Remove double spaces
+                                            clean_text = clean_text.replace('  ', ' ')
+                                            
+                                        chunk_tts.generate_speech_ya(
+                                            output_path=output_dir,
+                                            filename=os.path.basename(temp_file),
+                                            text=clean_text,
+                                            speaker=voice,
+                                            mood=mood
+                                        )
+                                        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+                                            # Add to queue for playback
+                                            audio_queue.put((chunk_count, temp_file))
+                                            logger.debug(f"Successfully generated final chunk")
+                                        else:
+                                            logger.error(f"Failed to generate audio for final chunk")
+                                    except Exception as chunk_err:
+                                        logger.error(f"Error processing final chunk: {chunk_err}")
+                                
+                                # Signal that generation is complete
+                                generation_complete.set()
+                                logger.info("All chunks generated")
+                            except Exception as e:
+                                logger.error(f"Error in chunk generation: {e}")
+                                generation_complete.set()  # Ensure we signal completion even on error
+                        
+                        # Consumer function to play chunks
+                        def play_chunks():
+                            try:
+                                if not pygame or not pygame.mixer.get_init():
+                                    logger.error("Pygame mixer not initialized, cannot play chunks")
+                                    return
+                                
+                                # Track the next chunk number to play
+                                next_chunk = 1
+                                chunks_played = 0
+                                
+                                # Keep playing until all chunks are played or stopped
+                                while not self.stopped.is_set():
+                                    try:
+                                        # Check if we have the next chunk in the queue
+                                        if not audio_queue.empty():
+                                            chunk_num, temp_file = audio_queue.get()
+                                            
+                                            # If this is the next chunk to play, play it
+                                            if chunk_num == next_chunk:
+                                                logger.info(f"Playing chunk {chunk_num}")
+                                                sound = pygame.mixer.Sound(temp_file)
+                                                channel = sound.play()
+                                                
+                                                # Wait for the sound to finish playing
+                                                while channel.get_busy() and not self.stopped.is_set():
+                                                    pygame.time.wait(100)
+                                                
+                                                # Clean up the chunk file after playing
+                                                try:
+                                                    os.remove(temp_file)
+                                                    logger.debug(f"Removed temp file after playback: {temp_file}")
+                                                except Exception as e:
+                                                    logger.warning(f"Could not remove temp file {temp_file}: {e}")
+                                                
+                                                chunks_played += 1
+                                                next_chunk += 1
+                                            else:
+                                                # Put it back in the queue if it's not the next one
+                                                audio_queue.put((chunk_num, temp_file))
+                                        
+                                        # If queue is empty and generation is complete, we're done
+                                        if audio_queue.empty() and generation_complete.is_set():
+                                            logger.info(f"All {chunks_played} chunks played")
+                                            break
+                                        
+                                        # Small sleep to prevent CPU hogging
+                                        pygame.time.wait(50)
+                                    except Exception as e:
+                                        logger.error(f"Error playing chunk: {e}")
+                                        break
+                            except Exception as e:
+                                logger.error(f"Error in chunk playback: {e}")
+                            finally:
+                                # Clean up pygame
+                                if pygame and pygame.mixer.get_init():
+                                    pygame.mixer.quit()
+                                    self.pygame_initialized = False
+                        
+                        # Start producer and consumer threads
+                        producer_thread = threading.Thread(target=generate_chunks)
+                        consumer_thread = threading.Thread(target=play_chunks)
+                        
+                        producer_thread.daemon = True
+                        consumer_thread.daemon = True
+                        
+                        producer_thread.start()
+                        consumer_thread.start()
+                        
+                        # Wait for both threads to complete
+                        producer_thread.join()
+                        consumer_thread.join()
+                        
+                        logger.info("Streaming playback completed")
                     else:
                         # For shorter texts, use standard method
                         try:
