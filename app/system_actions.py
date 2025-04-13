@@ -379,10 +379,135 @@ class SystemActions:
                 gc.collect()
                 comtypes.CoUninitialize()
 
-    def switch_audio_device(self, device_name=None):
-        """Switch between audio output devices"""
+    def switch_audio_device(self, device_name=None, device_names=None):
+        """Switch between audio output devices
+        
+        Args:
+            device_name (str, optional): Single device name to switch to
+            device_names (list, optional): List of device names to cycle through in order
+            
+        Returns:
+            bool: True if switching was successful
+        """
         try:
             if self.system == "Windows":
+                # If device_names is provided and not empty, it takes precedence
+                if device_names and isinstance(device_names, list) and len(device_names) > 0:
+                    logger.debug(f"Attempting to cycle through {len(device_names)} audio devices")
+                    
+                    # First check if the module is available
+                    cmd = 'powershell "Get-Command -Module AudioDeviceCmdlets -ErrorAction SilentlyContinue | Measure-Object | Select-Object -ExpandProperty Count"'
+                    result = subprocess.run(
+                        cmd, shell=True, capture_output=True, text=True
+                    )
+
+                    if (
+                        result.returncode == 0
+                        and result.stdout.strip()
+                        and int(result.stdout.strip()) > 0
+                    ):
+                        logger.info("AudioDeviceCmdlets module is available")
+                        
+                        # Get current device
+                        cmd = 'powershell -Command "Get-AudioDevice -Playback | Select-Object -ExpandProperty Name"'
+                        result = subprocess.run(
+                            cmd, shell=True, capture_output=True, text=True
+                        )
+                        
+                        if result.returncode != 0 or not result.stdout.strip():
+                            logger.warning("Failed to get current audio device")
+                            current_device = None
+                        else:
+                            current_device = result.stdout.strip()
+                            logger.debug(f"Current audio device: {current_device}")
+                        
+                        # Find which device in the list we're currently using
+                        current_index = -1
+                        for i, device in enumerate(device_names):
+                            if current_device and device.lower() in current_device.lower():
+                                current_index = i
+                                logger.debug(f"Current device matches entry {i+1}: {device}")
+                                break
+                        
+                        # Determine the next device to use
+                        if current_index >= 0:
+                            # Go to the next device in the list
+                            next_index = (current_index + 1) % len(device_names)
+                        else:
+                            # If current device not in list, start with the first one
+                            next_index = 0
+                            
+                        next_device = device_names[next_index]
+                        logger.info(f"Switching to device {next_index+1}/{len(device_names)}: {next_device}")
+                        
+                        # Try to find the device ID by partial name match
+                        escaped_name = next_device.replace("'", "''")
+                        cmd = f"powershell -Command \"Get-AudioDevice -List | Where-Object {{$_.Type -eq 'Playback' -and $_.Name -like '*{escaped_name}*'}} | Select-Object -ExpandProperty ID -First 1\""
+                        result = subprocess.run(
+                            cmd, shell=True, capture_output=True, text=True
+                        )
+
+                        if result.returncode == 0 and result.stdout.strip():
+                            device_id = result.stdout.strip()
+                            logger.debug(f"Found device ID: {device_id}")
+
+                            # Switch using ID instead of name
+                            cmd = f"powershell -Command \"Set-AudioDevice -ID '{device_id}'\""
+                            result = subprocess.run(
+                                cmd, shell=True, capture_output=True, text=True
+                            )
+
+                            if result.returncode == 0:
+                                logger.info(f"Successfully switched to audio device: {next_device}")
+                                self.notify('device_change', f"Switched to audio device: {next_device}")
+                                return True
+                            else:
+                                logger.warning(f"Failed to switch using device ID: {result.stderr}")
+                        else:
+                            logger.warning(f"Could not find device ID for name: {next_device}")
+                            # Try next device in list
+                            if len(device_names) > 1:
+                                retry_index = (next_index + 1) % len(device_names)
+                                retry_device = device_names[retry_index]
+                                logger.info(f"Trying next device in list: {retry_device}")
+                                
+                                # Try to find the device ID by partial name match
+                                escaped_name = retry_device.replace("'", "''")
+                                cmd = f"powershell -Command \"Get-AudioDevice -List | Where-Object {{$_.Type -eq 'Playback' -and $_.Name -like '*{escaped_name}*'}} | Select-Object -ExpandProperty ID -First 1\""
+                                result = subprocess.run(
+                                    cmd, shell=True, capture_output=True, text=True
+                                )
+                                
+                                if result.returncode == 0 and result.stdout.strip():
+                                    device_id = result.stdout.strip()
+                                    cmd = f"powershell -Command \"Set-AudioDevice -ID '{device_id}'\""
+                                    result = subprocess.run(
+                                        cmd, shell=True, capture_output=True, text=True
+                                    )
+                                    
+                                    if result.returncode == 0:
+                                        logger.info(f"Successfully switched to fallback device: {retry_device}")
+                                        self.notify('device_change', f"Switched to audio device: {retry_device}")
+                                        return True
+                                
+                            # If all fails, open sound control panel
+                            logger.info("Opening Sound Control Panel as fallback")
+                            subprocess.run(
+                                "powershell \"Start-Process control.exe -ArgumentList 'mmsys.cpl'\"",
+                                shell=True,
+                            )
+                            return True
+                    else:
+                        logger.warning("AudioDeviceCmdlets module is not available")
+                        # Open sound control panel
+                        subprocess.run(
+                            "powershell \"Start-Process control.exe -ArgumentList 'mmsys.cpl'\"",
+                            shell=True,
+                        )
+                        logger.info("Opened Windows Sound Control Panel")
+                        return True
+                
+                # If we got here, use the original single device_name logic
                 logger.debug(f"Attempting to switch audio device: '{device_name}'")
 
                 # Only use AudioDeviceCmdlets for audio device switching
@@ -845,10 +970,11 @@ class SystemActions:
 
             elif action_type == "audio_device":
                 device_name = action_params.get("device_name", "")
+                device_names = action_params.get("device_names", [])
                 logger.debug(
-                    f"Audio device switching requested for device: '{device_name}'"
+                    f"Audio device switching requested with device_name: '{device_name}' and device_names: {device_names}"
                 )
-                result = self.switch_audio_device(device_name)
+                result = self.switch_audio_device(device_name, device_names)
                 logger.debug(f"Audio device switching result: {result}")
                 return result
 

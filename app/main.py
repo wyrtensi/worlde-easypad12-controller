@@ -2782,24 +2782,139 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             header_layout.addStretch()
             device_layout.addLayout(header_layout)
             
-            # Device input
-            input_layout = QtWidgets.QHBoxLayout()
-            device_label = QtWidgets.QLabel("Device Name:")
-            device_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            # Multiple device list section
+            device_list_container = QtWidgets.QWidget()
+            device_list_layout = QtWidgets.QVBoxLayout(device_list_container)
+            device_list_layout.setContentsMargins(0, 0, 0, 0)
+            device_list_layout.setSpacing(8)
             
-            self.form_widgets["device_name"] = QtWidgets.QLineEdit(existing_data.get("device_name", ""))
-            self.form_widgets["device_name"].setStyleSheet(LINEEDIT_STYLE)
-            self.form_widgets["device_name"].setPlaceholderText("Enter device name (leave empty to toggle)")
-            
-            input_layout.addWidget(device_label)
-            input_layout.addWidget(self.form_widgets["device_name"])
-            device_layout.addLayout(input_layout)
+            # Label for device list
+            devices_label = QtWidgets.QLabel("Device Names:")
+            devices_label.setStyleSheet(f"color: {TEXT_COLOR}; font-weight: bold;")
+            device_list_layout.addWidget(devices_label)
             
             # Help text
-            help_label = QtWidgets.QLabel("Leave empty to toggle between audio devices; enter name to switch to a specific device")
+            help_label = QtWidgets.QLabel("Enter part of device name. If multiple devices are specified, button will cycle through them in order.")
             help_label.setStyleSheet("color: #888888; font-style: italic; font-size: 12px;")
             help_label.setWordWrap(True)
-            device_layout.addWidget(help_label)
+            device_list_layout.addWidget(help_label)
+            
+            # Container for device entries
+            entries_container = QtWidgets.QWidget()
+            entries_layout = QtWidgets.QVBoxLayout(entries_container)
+            entries_layout.setContentsMargins(0, 0, 0, 0)
+            entries_layout.setSpacing(5)
+            
+            # Load existing device names or create a default entry
+            device_names = []
+            if isinstance(existing_data.get("device_names"), list):
+                device_names = existing_data["device_names"]
+            elif existing_data.get("device_name"):
+                device_names = [existing_data["device_name"]]
+                
+            # Ensure we have at least one entry
+            if not device_names:
+                device_names = [""]
+                
+            # Function to create a new device entry
+            def create_device_entry(name="", index=None):
+                entry_frame = QtWidgets.QFrame()
+                entry_frame.setStyleSheet("background-color: #2A2A2A; border-radius: 4px; padding: 4px;")
+                entry_layout = QtWidgets.QHBoxLayout(entry_frame)
+                entry_layout.setContentsMargins(5, 5, 5, 5)
+                
+                # Create line edit for device name
+                device_edit = QtWidgets.QLineEdit(name)
+                device_edit.setStyleSheet(LINEEDIT_STYLE)
+                device_edit.setPlaceholderText("Enter part of device name")
+                
+                # Store in form widgets with a unique key
+                entry_id = len(self.form_widgets.get("device_entries", []))
+                if "device_entries" not in self.form_widgets:
+                    self.form_widgets["device_entries"] = []
+                self.form_widgets["device_entries"].append(device_edit)
+                
+                # Remove button
+                remove_btn = QtWidgets.QPushButton("×")
+                remove_btn.setFixedSize(28, 28)
+                remove_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #444444;
+                        color: #CCCCCC;
+                        border: none;
+                        border-radius: 14px;
+                        font-weight: bold;
+                        font-size: 16px;
+                    }
+                    QPushButton:hover {
+                        background-color: #555555;
+                        color: #FFFFFF;
+                    }
+                """)
+                remove_btn.setToolTip("Remove this device")
+                
+                # Only enable remove if we have more than one entry
+                remove_btn.setEnabled(len(self.form_widgets.get("device_entries", [])) > 1)
+                
+                # Function to remove this entry
+                def remove_entry():
+                    # Remove from layout and form widgets
+                    if entry_frame in entries_layout.parent().findChildren(QtWidgets.QFrame):
+                        entries_layout.removeWidget(entry_frame)
+                        entry_frame.deleteLater()
+                        
+                        # Update form widgets
+                        if device_edit in self.form_widgets["device_entries"]:
+                            self.form_widgets["device_entries"].remove(device_edit)
+                            
+                            # Update remove buttons state
+                            for btn in entries_container.findChildren(QtWidgets.QPushButton):
+                                btn.setEnabled(len(self.form_widgets["device_entries"]) > 1)
+                
+                remove_btn.clicked.connect(remove_entry)
+                
+                # Add to layout
+                entry_layout.addWidget(device_edit)
+                entry_layout.addWidget(remove_btn)
+                entries_layout.addWidget(entry_frame)
+                
+                return entry_frame
+            
+            # Add existing entries
+            for device_name in device_names:
+                create_device_entry(device_name)
+                
+            # Add button for new entries
+            add_btn = QtWidgets.QPushButton("Add Device")
+            add_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {SECONDARY_COLOR};
+                    color: {TEXT_COLOR};
+                    border: none;
+                    border-radius: 4px;
+                    padding: 5px 10px;
+                }}
+                QPushButton:hover {{
+                    background-color: {PRIMARY_COLOR};
+                }}
+            """)
+            
+            # Function to add a new entry
+            def add_new_entry():
+                create_device_entry()
+                
+                # Enable all remove buttons since we now have multiple entries
+                for btn in entries_container.findChildren(QtWidgets.QPushButton):
+                    btn.setEnabled(True)
+            
+            add_btn.clicked.connect(add_new_entry)
+            
+            # Add everything to device list container
+            device_list_layout.addWidget(entries_container)
+            device_list_layout.addWidget(add_btn)
+            
+            # Add container to main layout
+            device_layout.addWidget(device_list_container)
             
             self.action_form_layout.addWidget(device_frame)
             
@@ -3611,8 +3726,25 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             }
             
         elif action_type == "audio_device":
+            device_entries = self.form_widgets.get("device_entries", [])
+            device_names = [entry.text() for entry in device_entries if entry.text().strip()]
+            
+            # If no devices are specified, return empty device_name to toggle between all
+            if not device_names:
+                return {
+                    "device_name": "",
+                }
+            
+            # If only one device, use the original format for backward compatibility
+            if len(device_names) == 1:
+                return {
+                    "device_name": device_names[0],
+                }
+            
+            # Multiple devices - use new format with list
             return {
-                "device_name": self.form_widgets.get("device_name", QtWidgets.QLineEdit()).text(),
+                "device_names": device_names,
+                "device_name": device_names[0],  # For backwards compatibility
             }
             
         elif action_type == "text":
