@@ -3134,12 +3134,15 @@ class ButtonConfigDialog(QtWidgets.QDialog):
             
             self.form_widgets["model"] = QtWidgets.QComboBox()
             self.form_widgets["model"].setStyleSheet(COMBOBOX_STYLE)
-            models = ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"]
+            models = ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"]
             model_display_names = {
-                "gpt-4o": "GPT-4o (Latest)",
-                "gpt-4o-mini": "GPT-4o Mini (Faster)",
-                "gpt-4": "GPT-4 (Older)",
-                "gpt-3.5-turbo": "GPT-3.5 Turbo (Fastest)"
+                "gpt-4o": "GPT-4o",
+                "gpt-4o-mini": "GPT-4o Mini",
+                "gpt-4": "GPT-4",
+                "gpt-3.5-turbo": "GPT-3.5 Turbo",
+                "gpt-4.1": "GPT-4.1",
+                "gpt-4.1-mini": "GPT-4.1 Mini",
+                "gpt-4.1-nano": "GPT-4.1 Nano"
             }
             
             for model_id in models:
